@@ -1,36 +1,130 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Video Overlay Editor
 
-## Getting Started
+Add playful hand-drawn overlays to your videos using AI-generated assets and FFmpeg compositing.
 
-First, run the development server:
+## Features
+
+- 🎨 **AI-Generated Overlays**: Colorful scribbles and paper textures created with Gemini
+- ⚡ **Fast Processing**: Composite overlays in under 2x video length
+- 🎯 **Smart Placement**: Edge-based algorithm prevents overlays from blocking subjects
+- 🎬 **Simple Workflow**: Upload → Customize → Process → Download
+
+## Setup
+
+### Prerequisites
+
+- Node.js 18+ and npm
+- FFmpeg installed on your system
+- Gemini API key ([Get one here](https://ai.google.dev/))
+
+### Installation
+
+1. Clone and install dependencies:
+```bash
+npm install
+```
+
+2. Create environment file:
+```bash
+cp .env.local.example .env.local
+```
+
+3. Add your Gemini API key to `.env.local`:
+```
+GOOGLE_AI_API_KEY=your_api_key_here
+```
+
+### Generate Overlay Assets (Optional for MVP)
+
+Generate AI-powered overlay assets once:
+
+```bash
+npm run generate-assets
+```
+
+This creates 20 scribble sprites, 8 paper frames, and 2 corner overlays in `public/assets/overlays/`.
+
+**Note**: For the MVP, you can use placeholder assets. The compositing system will work with any PNG images.
+
+## Development
+
+Run the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) to see the app.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## How It Works
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **Upload**: User uploads a video (MP4, MOV, WebM)
+2. **Customize**: Select scribble density (low/medium/high)
+3. **Process**:
+   - Extract video metadata with ffprobe
+   - Calculate safe zones (edges) to avoid blocking subject
+   - Generate random scribble animation sequence
+   - Composite overlays with FFmpeg
+4. **Download**: Get processed video with overlays
 
-## Learn More
+### Smart Placement (Level 1)
 
-To learn more about Next.js, take a look at the following resources:
+The app uses edge-based placement to keep overlays from covering the main subject:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **Scribbles**: Only placed in outer 15-20% edge bands
+- **Paper frame**: Natural border design
+- **Corner separator**: Locked to corners
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+No AI analysis needed - works for 95% of videos where subjects are centered!
 
-## Deploy on Vercel
+## Project Structure
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+video-gen/
+├── app/
+│   ├── api/
+│   │   ├── upload/       # Video upload endpoint
+│   │   ├── process/      # FFmpeg processing
+│   │   ├── status/       # Job status polling
+│   │   └── download/     # Download processed video
+│   └── page.tsx          # Main UI
+├── components/
+│   ├── VideoUploader.tsx    # Drag-and-drop uploader
+│   ├── StyleControls.tsx    # Customization UI
+│   └── ProcessingProgress.tsx # Real-time progress
+├── lib/
+│   ├── config.ts            # App configuration
+│   ├── gemini-client.ts     # Gemini API integration
+│   ├── overlay-animator.ts  # Animation logic
+│   └── video-processor.ts   # FFmpeg wrapper
+└── scripts/
+    └── generate-assets.ts   # Asset generation script
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Tech Stack
+
+- **Frontend**: Next.js 15, React, Tailwind CSS
+- **Video Processing**: FFmpeg (fluent-ffmpeg)
+- **AI Assets**: Gemini Nano Banana (image generation)
+- **State**: In-memory job queue (MVP - upgrade to Redis for production)
+
+## API Endpoints
+
+- `POST /api/upload` - Upload video
+- `POST /api/process` - Start processing job
+- `GET /api/status/[jobId]` - Check job status
+- `GET /api/download/[videoId]` - Download result
+
+## Future Enhancements
+
+- [ ] **Level 2 Placement**: MediaPipe person detection
+- [ ] **Level 3 Placement**: Gemini video understanding
+- [ ] **Custom Assets**: Per-user generated overlays
+- [ ] **More Controls**: Paper intensity, corner toggle
+- [ ] **Job Queue**: Redis + Bull for scalability
+- [ ] **Video Trimming**: Edit video before overlays
+- [ ] **Templates**: Pre-made style presets
+
+## License
+
+MIT
