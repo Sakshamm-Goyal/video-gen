@@ -62,8 +62,9 @@ def process_video(input_path, output_path, stroke_size=10, sample_rate=1):
     print(f"Output: {output_path}")
     print(f"Stroke size: {stroke_size}px")
     
-    # Initialize rembg session (use u2net for speed, or isnet-general-use for quality)
-    session = new_session("u2net")
+    # Initialize rembg session - use isnet-general-use for ALL objects (not just humans)
+    # This model detects general foreground objects including people, flowers, objects, etc.
+    session = new_session("isnet-general-use")
     
     # Open input video
     cap = cv2.VideoCapture(input_path)

@@ -2,37 +2,29 @@
 
 import { useState } from 'react';
 import { VideoUploader } from '@/components/VideoUploader';
-import { StyleControls } from '@/components/StyleControls';
 import { ProcessingProgress } from '@/components/ProcessingProgress';
 
 export default function Home() {
-  const [currentStep, setCurrentStep] = useState<'upload' | 'customize' | 'processing' | 'complete'>('upload');
+  const [currentStep, setCurrentStep] = useState<'upload' | 'processing' | 'complete'>('upload');
   const [videoId, setVideoId] = useState<string>('');
   const [filename, setFilename] = useState<string>('');
   const [jobId, setJobId] = useState<string>('');
   const [outputUrl, setOutputUrl] = useState<string>('');
-  const [settings, setSettings] = useState({
-    density: 'medium' as 'low' | 'medium' | 'high',
-    paperIntensity: 0.3,
-    cornerEnabled: true,
-  });
 
-  const handleUploadComplete = (vid: string, fname: string) => {
+  // Auto-start processing after upload (no customize step)
+  const handleUploadComplete = async (vid: string, fname: string) => {
     setVideoId(vid);
     setFilename(fname);
-    setCurrentStep('customize');
-  };
-
-  const handleProcessStart = async () => {
     setCurrentStep('processing');
 
+    // Automatically start processing with intelligent defaults
     try {
       const response = await fetch('/api/process', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          videoId,
-          density: settings.density,
+          videoId: vid,
+          density: 'medium', // Auto: AI will determine based on video energy
         }),
       });
 
@@ -72,17 +64,16 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-6 py-12">
-        {/* Progress Steps */}
+        {/* Progress Steps - Simplified: Upload -> Process -> Download */}
         <div className="flex items-center justify-center mb-12 gap-4">
           {[
             { step: 'upload', label: '1. Upload', icon: '📤' },
-            { step: 'customize', label: '2. Customize', icon: '🎨' },
-            { step: 'processing', label: '3. Process', icon: '⚙️' },
-            { step: 'complete', label: '4. Download', icon: '⬇️' },
+            { step: 'processing', label: '2. Process', icon: '⚙️' },
+            { step: 'complete', label: '3. Download', icon: '⬇️' },
           ].map(({ step, label, icon }) => {
             const isActive = currentStep === step;
-            const isPast = ['upload', 'customize', 'processing', 'complete'].indexOf(currentStep) >
-              ['upload', 'customize', 'processing', 'complete'].indexOf(step);
+            const isPast = ['upload', 'processing', 'complete'].indexOf(currentStep) >
+              ['upload', 'processing', 'complete'].indexOf(step);
 
             return (
               <div
@@ -106,20 +97,6 @@ export default function Home() {
           {currentStep === 'upload' && (
             <div className="animate-fadeIn">
               <VideoUploader onUploadComplete={handleUploadComplete} />
-            </div>
-          )}
-
-          {currentStep === 'customize' && (
-            <div className="animate-fadeIn space-y-6">
-              <StyleControls onSettingsChange={setSettings} />
-              <div className="text-center">
-                <button
-                  onClick={handleProcessStart}
-                  className="px-8 py-4 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold rounded-full hover:scale-105 transition-transform shadow-lg"
-                >
-                  🎬 Generate Overlay Video
-                </button>
-              </div>
             </div>
           )}
 

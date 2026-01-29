@@ -25,4 +25,22 @@ export const config = {
       bottomBand: 0.88,    // 12% bottom edge (starts at 88%)
     },
   },
+  // Intelligent effect timing configuration
+  effects: {
+    paper: {
+      minVisibleDuration: 1.0,    // seconds - minimum time paper is visible
+      maxVisibleDuration: 4.0,    // seconds - maximum time paper is visible
+      minGapDuration: 0.5,        // seconds - minimum gap between appearances
+      maxGapDuration: 3.0,        // seconds - maximum gap between appearances
+      appearanceChance: 0.7,      // 70% chance paper appears in each time slot
+    },
+    scribbles: {
+      burstMinDuration: 0.3,      // seconds - minimum burst duration
+      burstMaxDuration: 1.5,      // seconds - maximum burst duration
+      quietMinDuration: 0.2,      // seconds - minimum quiet period
+      quietMaxDuration: 1.0,      // seconds - maximum quiet period
+      minDensity: 2,              // minimum scribbles per burst
+      maxDensity: 18,             // maximum scribbles per burst
+    }
+  },
 };
