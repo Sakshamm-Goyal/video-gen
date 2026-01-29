@@ -1,7 +1,11 @@
 import ffmpeg from 'fluent-ffmpeg';
-import { promisify } from 'util';
 import { config } from './config';
 import { ScribbleAnimation } from './overlay-animator';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import path from 'path';
+
+const execAsync = promisify(exec);
 
 export interface VideoInfo {
     duration: number;
@@ -30,7 +34,7 @@ export async function extractVideoInfo(videoPath: string): Promise<VideoInfo> {
 
             resolve({
                 duration: metadata.format.duration || 0,
-                fps: eval(videoStream.r_frame_rate || '30/1'), // Parse fractional fps
+                fps: eval(videoStream.r_frame_rate || '30/1'),
                 width: videoStream.width || 1280,
                 height: videoStream.height || 720,
                 codec: videoStream.codec_name || 'unknown',
@@ -50,32 +54,34 @@ export async function compositeOverlays(
     scribblePaths: string[],
     cornerPath: string | null,
     videoInfo: VideoInfo,
-    onProgress?: (percent: number) => void
+    onProgress?: (percent: number) => void,
+    subjectBounds?: { x: number; y: number; width?: number; height?: number },
+    humanOutlinePath?: string | null
 ): Promise<void> {
     return new Promise(async (resolve, reject) => {
-        // Check which files actually exist
         const fs = require('fs').promises;
         const existingPaperFrames: string[] = [];
         const existingScribbles: string[] = [];
         let existingCorner: string | null = null;
+        let existingOutline: string | null = null;
 
         // Verify paper frames exist
-        for (const path of paperFramePaths) {
+        for (const p of paperFramePaths) {
             try {
-                await fs.access(path);
-                existingPaperFrames.push(path);
+                await fs.access(p);
+                existingPaperFrames.push(p);
             } catch {
-                console.warn(`Paper frame not found: ${path}`);
+                console.warn(`Paper frame not found: ${p}`);
             }
         }
 
         // Verify scribbles exist
-        for (const path of scribblePaths) {
+        for (const p of scribblePaths) {
             try {
-                await fs.access(path);
-                existingScribbles.push(path);
+                await fs.access(p);
+                existingScribbles.push(p);
             } catch {
-                console.warn(`Scribble not found: ${path}`);
+                console.warn(`Scribble not found: ${p}`);
             }
         }
 
@@ -89,37 +95,53 @@ export async function compositeOverlays(
             }
         }
 
-        // Build filter complex with only existing assets
+        // Verify human outline exists
+        if (humanOutlinePath) {
+            try {
+                await fs.access(humanOutlinePath);
+                existingOutline = humanOutlinePath;
+            } catch {
+                console.warn(`Human outline not found: ${humanOutlinePath}`);
+            }
+        }
+
         const filterComplex = createAnimatedFilterComplex(
             scribbleAnimations,
             existingPaperFrames,
             existingScribbles,
             existingCorner,
-            videoInfo
+            videoInfo,
+            subjectBounds,
+            existingOutline
         );
 
-        // Debug: Log what we're adding
         console.log('FFmpeg inputs:', {
             video: inputPath,
             paperFrames: existingPaperFrames.length,
             scribbles: existingScribbles.length,
             corner: existingCorner ? 1 : 0,
-            totalInputs: 1 + existingPaperFrames.length + existingScribbles.length + (existingCorner ? 1 : 0)
+            humanOutline: existingOutline ? 1 : 0,
+            totalInputs: 1 + existingPaperFrames.length + existingScribbles.length + (existingCorner ? 1 : 0) + (existingOutline ? 1 : 0)
         });
 
         const command = ffmpeg(inputPath);
 
-        // Add only existing paper frame inputs (FFmpeg will handle static images in overlay)
-        existingPaperFrames.forEach((path) => {
-            command.input(path);
+        // Add human outline video FIRST (so it's input 1)
+        if (existingOutline) {
+            command.input(existingOutline);
+        }
+
+        // Add paper frame inputs
+        existingPaperFrames.forEach((p) => {
+            command.input(p);
         });
 
-        // Add only existing scribble inputs
-        existingScribbles.forEach((path) => {
-            command.input(path);
+        // Add scribble inputs
+        existingScribbles.forEach((p) => {
+            command.input(p);
         });
 
-        // Add corner separator if it exists
+        // Add corner separator if exists
         if (existingCorner) {
             command.input(existingCorner);
         }
@@ -128,15 +150,16 @@ export async function compositeOverlays(
             .complexFilter(filterComplex)
             .outputOptions([
                 '-map', '[output]',
+                '-map', '0:a?',
                 '-c:v', 'libx264',
                 '-preset', 'fast',
                 '-crf', '23',
                 '-pix_fmt', 'yuv420p',
-                '-shortest', // End when shortest input ends
+                '-c:a', 'aac',
+                '-t', String(videoInfo.duration),
             ])
             .output(outputPath);
 
-        // Progress tracking
         if (onProgress) {
             command.on('progress', (progress) => {
                 if (progress.percent) {
@@ -157,127 +180,177 @@ export async function compositeOverlays(
 }
 
 /**
- * Create animated FFmpeg filter complex with:
- * - Paper frames that crossfade over time
- * - Scribbles that appear/disappear dynamically
- * - White corner separator
- * 
- * Uses overlay with eof_action=repeat for static images
+ * Create animated FFmpeg filter complex with all effects:
+ * 1. White outline/glow around the main subject (AI segmentation)
+ * 2. Paper frame texture overlay
+ * 3. Many scribbles around the subject with jitter animation
+ * 4. White corner separator effect
  */
 export function createAnimatedFilterComplex(
     scribbleAnimations: ScribbleAnimation[],
     paperFramePaths: string[],
     scribblePaths: string[],
     cornerPath: string | null,
-    videoInfo: VideoInfo
+    videoInfo: VideoInfo,
+    subjectBounds?: { x: number; y: number; width?: number; height?: number },
+    humanOutlinePath?: string | null
 ): string {
     const filters: string[] = [];
     const width = 1280;
     const height = 720;
-    const fps = videoInfo.fps;
     const duration = videoInfo.duration;
 
-    // 1. Scale base video
-    filters.push(`[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[base]`);
-
-    // Input indices: 0=base video, 1-N=paper frames, N+1-M=scribbles, M+1=corner
-    const paperInputStart = 1;
+    // Input indices - human outline is input 1 if it exists
+    const outlineInputIdx = humanOutlinePath ? 1 : -1;
+    const paperInputStart = humanOutlinePath ? 2 : 1;
     const scribbleInputStart = paperInputStart + paperFramePaths.length;
     const cornerInputIdx = scribbleInputStart + scribblePaths.length;
+
+    // 1. Scale base video
+    filters.push(`[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[base]`);
+
+    // Calculate subject area (normalized to pixels)
+    const subjectX = (subjectBounds?.x ?? 0.25) * width;
+    const subjectY = (subjectBounds?.y ?? 0.1) * height;
+    const subjectW = (subjectBounds?.width ?? 0.5) * width;
+    const subjectH = (subjectBounds?.height ?? 0.8) * height;
     
-    // Validate we have at least some assets
-    if (paperFramePaths.length === 0 && scribblePaths.length === 0 && !cornerPath) {
-        // No overlays - just return base video
-        filters.push(`[base]format=yuv420p[output]`);
-        return filters.join(';');
+    // Exclusion zone with margin
+    const margin = 80;
+    const excludeLeft = Math.max(0, subjectX - margin);
+    const excludeRight = Math.min(width, subjectX + subjectW + margin);
+    const excludeTop = Math.max(0, subjectY - margin);
+    const excludeBottom = Math.min(height, subjectY + subjectH + margin);
+
+    let currentLayer = 'base';
+
+    // 2. Add WHITE OUTLINE around human subject (from AI segmentation)
+    if (humanOutlinePath && outlineInputIdx > 0) {
+        filters.push(`[${outlineInputIdx}:v]scale=${width}:${height},format=rgba[outline_scaled]`);
+        filters.push(`[${currentLayer}][outline_scaled]overlay=x=0:y=0:eof_action=repeat:format=auto[with_outline]`);
+        currentLayer = 'with_outline';
     }
 
-    // 2. Create paper frame overlay
-    // Scale static images and use overlay with eof_action=repeat to loop them
+    // 3. Add PAPER FRAME texture overlay (visible vintage border)
     if (paperFramePaths.length > 0) {
-        // Scale first paper frame
-        filters.push(`[${paperInputStart}:v]scale=${width}:${height},format=rgba[paper0_raw]`);
-        // Overlay paper frame on base with blend effect using colorchannelmixer for opacity
-        filters.push(`[paper0_raw]colorchannelmixer=aa=0.35[paper0]`);
-        // Use overlay with eof_action=repeat to loop the static image
-        filters.push(`[base][paper0]overlay=x=0:y=0:eof_action=repeat:shortest=1[paper_bg]`);
-    } else {
-        // No paper frames - just copy base
-        filters.push(`[base]copy[paper_bg]`);
+        filters.push(`[${paperInputStart}:v]scale=${width}:${height},format=rgba[paper_scaled]`);
+        filters.push(`[${currentLayer}][paper_scaled]overlay=x=0:y=0:eof_action=repeat:format=auto[with_paper]`);
+        currentLayer = 'with_paper';
     }
+    
+    // Add a subtle vignette/border darkening effect for paper feel
+    filters.push(`[${currentLayer}]vignette=PI/4:mode=backward:eval=frame[with_vignette]`);
+    currentLayer = 'with_vignette';
 
-    // 3. Prepare scribble inputs with varied sizes
-    // Scale static images (they will be used with eof_action=repeat in overlay)
-    const scribbleScaled: string[] = [];
-    scribblePaths.forEach((_, i) => {
-        const inputIdx = scribbleInputStart + i;
-        const scale = 100 + (i % 5) * 30; // Vary sizes: 100, 130, 160, 190, 220
-        const name = `scrib${i}`;
-        filters.push(`[${inputIdx}:v]scale=${scale}:${scale},format=rgba[${name}]`);
-        scribbleScaled.push(name);
-    });
-
-    // 4. Apply scribbles in layers
-    let currentLayer = 'paper_bg';
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const centerRadius = 180;
-
-    // Create scribble overlay by sampling animations at regular intervals
-    const timeWindows = Math.ceil(duration / 0.3);
-    let layerCount = 0;
-    const maxLayers = 20; // Limit to avoid FFmpeg complexity
-
-    // Only add scribbles if we have any
-    if (scribbleScaled.length > 0) {
-        for (let window = 0; window < Math.min(timeWindows, maxLayers); window++) {
-            const t = window * 0.3;
-            const tEnd = t + 0.5;
-            
-            // Find scribbles active in this window
-            const activeScribbles = scribbleAnimations.filter(anim => {
-                const startTime = anim.startFrame / fps;
-                const endTime = anim.endFrame / fps;
-                return startTime < tEnd && endTime > t;
-            });
-
-            if (activeScribbles.length > 0) {
-                const anim = activeScribbles[Math.floor(Math.random() * activeScribbles.length)];
-                const scribbleIdx = anim.assetIndex % scribbleScaled.length;
-                const scribbleName = scribbleScaled[scribbleIdx];
+    // 4. Add MANY SCRIBBLES covering the background with JITTER
+    if (scribblePaths.length > 0) {
+        // Generate LOTS of scribble positions covering the whole frame EXCEPT subject area
+        const scribblePositions: Array<{ x: number; y: number; size: number; scribIdx: number }> = [];
+        
+        // Grid-based placement for better coverage
+        const gridCols = 8;
+        const gridRows = 5;
+        const cellW = width / gridCols;
+        const cellH = height / gridRows;
+        
+        for (let row = 0; row < gridRows; row++) {
+            for (let col = 0; col < gridCols; col++) {
+                const cellX = col * cellW;
+                const cellY = row * cellH;
+                const centerX = cellX + cellW / 2;
+                const centerY = cellY + cellH / 2;
                 
-                // Calculate position (avoid center)
-                let x = anim.x;
-                let y = anim.y;
-                const dist = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
-                if (dist < centerRadius) {
-                    const angle = Math.atan2(y - centerY, x - centerX);
-                    x = centerX + Math.cos(angle) * (centerRadius + 20);
-                    y = centerY + Math.sin(angle) * (centerRadius + 20);
+                // Skip cells that overlap with subject area
+                if (centerX > excludeLeft && centerX < excludeRight &&
+                    centerY > excludeTop && centerY < excludeBottom) {
+                    continue;
                 }
                 
-                // Clamp to bounds
-                x = Math.max(0, Math.min(width - 100, x));
-                y = Math.max(0, Math.min(height - 100, y));
-
-                const layerName = `layer${layerCount}`;
-                const enableExpr = `between(t,${t.toFixed(2)},${tEnd.toFixed(2)})`;
-                
-                // Use eof_action=repeat for static image overlay
-                filters.push(
-                    `[${currentLayer}][${scribbleName}]overlay=x=${Math.floor(x)}:y=${Math.floor(y)}:enable='${enableExpr}':eof_action=repeat:shortest=1[${layerName}]`
-                );
-                
-                currentLayer = layerName;
-                layerCount++;
+                // Add 1-2 scribbles per cell
+                const numInCell = 1 + Math.floor(Math.random() * 2);
+                for (let i = 0; i < numInCell; i++) {
+                    const size = 60 + Math.random() * 100;
+                    scribblePositions.push({
+                        x: cellX + Math.random() * (cellW - size * 0.5),
+                        y: cellY + Math.random() * (cellH - size * 0.5),
+                        size: size,
+                        scribIdx: Math.floor(Math.random() * scribblePaths.length)
+                    });
+                }
             }
         }
+
+        // Shuffle and use up to 35 scribbles for good coverage
+        const shuffled = scribblePositions.sort(() => Math.random() - 0.5);
+        const finalPositions = shuffled.slice(0, Math.min(35, shuffled.length));
+
+        // Track usage count for each scribble input
+        const usageCount: Map<number, number> = new Map();
+        finalPositions.forEach(pos => {
+            usageCount.set(pos.scribIdx, (usageCount.get(pos.scribIdx) || 0) + 1);
+        });
+
+        // Pre-process scribbles with split
+        const scribbleStreams: Map<number, string[]> = new Map();
+        
+        usageCount.forEach((count, scribIdx) => {
+            const inputIdx = scribbleInputStart + scribIdx;
+            const streams: string[] = [];
+            
+            if (count === 1) {
+                filters.push(`[${inputIdx}:v]format=rgba[scrib${scribIdx}_0]`);
+                streams.push(`scrib${scribIdx}_0`);
+            } else {
+                const splitOutputs = Array.from({ length: count }, (_, j) => `[scrib${scribIdx}_${j}]`).join('');
+                filters.push(`[${inputIdx}:v]format=rgba,split=${count}${splitOutputs}`);
+                for (let j = 0; j < count; j++) {
+                    streams.push(`scrib${scribIdx}_${j}`);
+                }
+            }
+            scribbleStreams.set(scribIdx, streams);
+        });
+
+        const nextCopy: Map<number, number> = new Map();
+
+        // Apply each scribble with JITTER animation
+        finalPositions.forEach((pos, i) => {
+            const { x, y, size, scribIdx } = pos;
+            const copyIdx = nextCopy.get(scribIdx) || 0;
+            nextCopy.set(scribIdx, copyIdx + 1);
+            
+            const streams = scribbleStreams.get(scribIdx);
+            if (!streams || copyIdx >= streams.length) return;
+            
+            const scribSource = streams[copyIdx];
+            const layerName = `scrib_layer${i}`;
+            
+            // Scale to desired size
+            const scaledName = `scrib_scaled${i}`;
+            filters.push(`[${scribSource}]scale=${Math.floor(size)}:-1[${scaledName}]`);
+            
+            // JITTER ANIMATION: wobble position using sine waves
+            const jitterAmount = 2 + Math.random() * 2; // 2-4 pixels
+            const jitterSpeed = 12 + Math.random() * 8; // Varied speed
+            const phase = i * 0.7; // Different phase per scribble
+            const baseX = Math.floor(Math.max(0, Math.min(width - size, x)));
+            const baseY = Math.floor(Math.max(0, Math.min(height - size, y)));
+            
+            // Expression for animated position
+            const xExpr = `${baseX}+${jitterAmount.toFixed(1)}*sin(t*${jitterSpeed.toFixed(1)}+${phase.toFixed(1)})`;
+            const yExpr = `${baseY}+${jitterAmount.toFixed(1)}*cos(t*${(jitterSpeed * 1.2).toFixed(1)}+${(phase * 0.8).toFixed(1)})`;
+            
+            filters.push(
+                `[${currentLayer}][${scaledName}]overlay=x='${xExpr}':y='${yExpr}':eof_action=repeat:format=auto[${layerName}]`
+            );
+            
+            currentLayer = layerName;
+        });
     }
 
-    // 5. Add white corner separator
+    // 5. Add WHITE CORNER SEPARATOR effect
     if (cornerPath) {
         filters.push(`[${cornerInputIdx}:v]scale=${width}:${height},format=rgba[corner_scaled]`);
-        filters.push(`[${currentLayer}][corner_scaled]overlay=x=0:y=0:eof_action=repeat:shortest=1[with_corner]`);
+        filters.push(`[${currentLayer}][corner_scaled]overlay=x=0:y=0:eof_action=repeat:format=auto[with_corner]`);
         currentLayer = 'with_corner';
     }
 
@@ -285,6 +358,53 @@ export function createAnimatedFilterComplex(
     filters.push(`[${currentLayer}]format=yuv420p[output]`);
 
     return filters.join(';');
+}
+
+/**
+ * Create human outline video using AI segmentation (rembg)
+ * This creates a white glow/outline around detected humans
+ */
+export async function createHumanOutline(
+    inputPath: string,
+    outputPath: string,
+    strokeSize: number = 12,
+    sampleRate: number = 2
+): Promise<string | null> {
+    const scriptPath = path.join(process.cwd(), 'scripts', 'create-human-outline.py');
+    const fs = require('fs').promises;
+    
+    // Check if Python script exists
+    try {
+        await fs.access(scriptPath);
+    } catch {
+        console.warn('Human outline script not found, skipping outline effect');
+        return null;
+    }
+    
+    console.log('Creating human outline using AI segmentation...');
+    console.log(`Input: ${inputPath}`);
+    console.log(`Output: ${outputPath}`);
+    
+    try {
+        const cmd = `python3 "${scriptPath}" "${inputPath}" "${outputPath}" --stroke ${strokeSize} --sample ${sampleRate}`;
+        console.log('Running:', cmd);
+        
+        const { stdout, stderr } = await execAsync(cmd, { 
+            timeout: 300000, // 5 minute timeout
+            maxBuffer: 50 * 1024 * 1024 // 50MB buffer
+        });
+        
+        if (stdout) console.log('Outline script output:', stdout);
+        if (stderr) console.warn('Outline script stderr:', stderr);
+        
+        // Verify output exists
+        await fs.access(outputPath);
+        console.log('Human outline created successfully:', outputPath);
+        return outputPath;
+    } catch (err) {
+        console.error('Failed to create human outline:', err);
+        return null;
+    }
 }
 
 /**

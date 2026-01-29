@@ -3,7 +3,7 @@ import { config } from './config';
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 /**
- * Call Gemini image generation API directly
+ * Call Imagen 3 or Gemini image generation API
  */
 async function generateImage(
     model: string,
@@ -11,6 +11,52 @@ async function generateImage(
     aspectRatio: string = '1:1',
     imageSize?: string
 ): Promise<Blob> {
+    // Check if using Imagen model
+    const isImagen = model.startsWith('imagen');
+    
+    if (isImagen) {
+        // Imagen 3 uses predict endpoint with different format
+        const url = `${GEMINI_API_BASE}/models/${model}:predict`;
+        
+        const body = {
+            instances: [{ prompt }],
+            parameters: {
+                aspectRatio: aspectRatio,
+                sampleCount: 1,
+                // Request PNG for transparency support
+                outputOptions: {
+                    mimeType: 'image/png'
+                }
+            }
+        };
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': config.gemini.apiKey
+            },
+            body: JSON.stringify(body)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Imagen API error: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        
+        // Imagen returns predictions array with bytesBase64Encoded
+        const prediction = data.predictions?.[0];
+        if (!prediction?.bytesBase64Encoded) {
+            throw new Error('No image data in Imagen response');
+        }
+
+        const buffer = Buffer.from(prediction.bytesBase64Encoded, 'base64');
+        return new Blob([buffer], { type: prediction.mimeType || 'image/png' });
+    }
+    
+    // Gemini native image generation (e.g., gemini-2.0-flash-exp-image-generation)
     const url = `${GEMINI_API_BASE}/models/${model}:generateContent`;
     
     const body: any = {
@@ -18,6 +64,7 @@ async function generateImage(
             parts: [{ text: prompt }]
         }],
         generationConfig: {
+            responseModalities: ['TEXT', 'IMAGE'],
             imageConfig: {
                 aspectRatio
             }
@@ -51,32 +98,31 @@ async function generateImage(
         throw new Error('No candidate in response');
     }
 
-    const part = candidate.content?.parts?.[0];
-    if (!part) {
-        throw new Error('No parts in response');
-    }
+    // Look through all parts for image data
+    const parts = candidate.content?.parts || [];
+    for (const part of parts) {
+        // Check for inlineData (base64 image)
+        if (part.inlineData?.data) {
+            const base64Data = part.inlineData.data;
+            const mimeType = part.inlineData.mimeType || 'image/png';
+            const buffer = Buffer.from(base64Data, 'base64');
+            return new Blob([buffer], { type: mimeType });
+        }
 
-    // Check for inlineData (base64 image)
-    if (part.inlineData) {
-        const base64Data = part.inlineData.data;
-        const mimeType = part.inlineData.mimeType || 'image/png';
-        const buffer = Buffer.from(base64Data, 'base64');
-        return new Blob([buffer], { type: mimeType });
-    }
-
-    // Fallback: try fileData
-    if (part.fileData) {
-        const base64Data = part.fileData.data;
-        const mimeType = part.fileData.mimeType || 'image/png';
-        const buffer = Buffer.from(base64Data, 'base64');
-        return new Blob([buffer], { type: mimeType });
+        // Fallback: try fileData
+        if (part.fileData?.data) {
+            const base64Data = part.fileData.data;
+            const mimeType = part.fileData.mimeType || 'image/png';
+            const buffer = Buffer.from(base64Data, 'base64');
+            return new Blob([buffer], { type: mimeType });
+        }
     }
 
     throw new Error('No image data found in response');
 }
 
 /**
- * Generate scribble sprite assets using Nano Banana (gemini-2.5-flash-image)
+ * Generate scribble sprite assets using Imagen 3
  */
 export async function generateScribbleAsset(index: number): Promise<Blob> {
     const colors = ['neon pink', 'electric blue', 'lime green', 'bright yellow', 'vibrant purple', 'hot orange', 'cyan', 'magenta'];
@@ -88,7 +134,7 @@ export async function generateScribbleAsset(index: number): Promise<Blob> {
     const prompt = `Create a transparent-background sticker sprite of messy hand-drawn ${randomShape}, ${randomColor} color, playful marker texture, no text, thick strokes, high contrast, centered, digital art style, vibrant colors`;
 
     try {
-        return await generateImage('gemini-2.5-flash-image', prompt, '1:1');
+        return await generateImage('imagen-3.0-generate-002', prompt, '1:1');
     } catch (error) {
         console.error('Error generating scribble:', error);
         throw error;
@@ -96,7 +142,7 @@ export async function generateScribbleAsset(index: number): Promise<Blob> {
 }
 
 /**
- * Generate paper frame texture using Nano Banana Pro (gemini-3-pro-image-preview)
+ * Generate paper frame texture using Imagen 3
  */
 export async function generatePaperFrame(index: number): Promise<Blob> {
     const variations = [
@@ -115,7 +161,7 @@ export async function generatePaperFrame(index: number): Promise<Blob> {
     const prompt = `Create a paper frame border texture: ${variation}, slight stains, handmade cutout look, empty transparent center, 1920x1080, no text, photograph style, realistic paper texture`;
 
     try {
-        return await generateImage('gemini-3-pro-image-preview', prompt, '16:9', '2K');
+        return await generateImage('imagen-3.0-generate-002', prompt, '16:9');
     } catch (error) {
         console.error('Error generating paper frame:', error);
         throw error;
@@ -130,7 +176,7 @@ export async function generateCornerSeparator(position: 'tl' | 'tr'): Promise<Bl
     const prompt = `Create a white painted foreground corner smear, soft feathered edge, like a white brush stroke overlay in the ${positionText} corner, 1920x1080, no text, artistic paint texture, translucent white paint effect`;
 
     try {
-        return await generateImage('gemini-2.5-flash-image', prompt, '16:9');
+        return await generateImage('imagen-3.0-generate-002', prompt, '16:9');
     } catch (error) {
         console.error('Error generating corner separator:', error);
         throw error;
@@ -203,7 +249,7 @@ async function uploadVideoFile(videoPath: string): Promise<string> {
 }
 
 /**
- * Analyze video for smart overlay placement using Gemini 3 Pro
+ * Analyze video for smart overlay placement using Gemini 2.5 Flash
  * Detects objects, faces, and main subjects to determine safe overlay zones
  */
 export async function analyzeVideoForPlacement(videoPath: string): Promise<{
@@ -225,7 +271,7 @@ export async function analyzeVideoForPlacement(videoPath: string): Promise<{
         
         let fileReady = false;
         let attempts = 0;
-        while (!fileReady && attempts < 60) { // Wait up to 60 seconds
+        while (!fileReady && attempts < 12000) { // Wait up to 4 minutes for file processing
             const statusResponse = await fetch(
                 `${GEMINI_API_BASE}/${fileResourceName}?key=${config.gemini.apiKey}`
             );
@@ -244,7 +290,7 @@ export async function analyzeVideoForPlacement(videoPath: string): Promise<{
             } else if (state === 'FAILED') {
                 throw new Error('File processing failed');
             } else {
-                console.log(`File processing... (${state}, attempt ${attempts + 1}/60)`);
+                console.log(`File processing... (${state}, attempt ${attempts + 1}/120)`);
                 await new Promise(resolve => setTimeout(resolve, 2000));
                 attempts++;
             }
@@ -254,53 +300,41 @@ export async function analyzeVideoForPlacement(videoPath: string): Promise<{
             throw new Error('File processing timeout - file may be too large or format unsupported');
         }
 
-        // Analyze video with Gemini 3 Pro
-        console.log('Analyzing video with Gemini 3 Pro...');
-        const analyzeUrl = `${GEMINI_API_BASE}/models/gemini-3-pro-preview:generateContent`;
+        // Analyze video with Gemini 2.5 Flash (fast and reliable for video)
+        console.log('Analyzing video with Gemini 2.5 Flash...');
+        const analyzeUrl = `${GEMINI_API_BASE}/models/gemini-2.5-flash:generateContent`;
         
-        const prompt = `Analyze this video and provide detailed information about:
-1. Main subjects (people, objects, animals) and their positions throughout the video
-2. Faces and their locations
-3. Safe zones where overlays can be placed without blocking important content
-4. Subject movement patterns
+        const prompt = `Analyze this video to find where the MAIN SUBJECT (person, product, animal) is located.
 
-Return a JSON object with this structure:
+I need the bounding box of the main subject in normalized coordinates (0.0 to 1.0):
+- x: left edge position (0 = left of frame, 1 = right)
+- y: top edge position (0 = top of frame, 1 = bottom)  
+- width: how wide the subject is (0.3 = 30% of frame width)
+- height: how tall the subject is (0.6 = 60% of frame height)
+
+Example: A person standing in the center-left would be approximately:
+{"x": 0.2, "y": 0.1, "width": 0.4, "height": 0.8}
+
+Return JSON with ALL FOUR values (x, y, width, height) required:
 {
-  "subjectBounds": {
-    "x": 0.0-1.0 (normalized left position),
-    "y": 0.0-1.0 (normalized top position),
-    "width": 0.0-1.0 (normalized width),
-    "height": 0.0-1.0 (normalized height)
-  },
-  "safeRegions": [
-    {
-      "timeStart": seconds,
-      "timeEnd": seconds,
-      "zones": ["left-edge", "top-edge", "right-edge", "bottom-edge", "corners"]
-    }
-  ],
-  "detectedObjects": [
-    {
-      "name": "object name",
-      "confidence": 0.0-1.0,
-      "bounds": {
-        "x": 0.0-1.0,
-        "y": 0.0-1.0,
-        "width": 0.0-1.0,
-        "height": 0.0-1.0
-      }
-    }
-  ]
+  "subjectBounds": {"x": <number>, "y": <number>, "width": <number>, "height": <number>},
+  "safeRegions": [{"timeStart": 0, "timeEnd": 10, "zones": ["top-left", "top-right"]}],
+  "detectedObjects": []
 }
 
-Be very precise about subject locations. If subjects move, provide multiple time segments.`;
+IMPORTANT: You MUST provide width and height values, not just x and y.`;
 
+        // Add timeout for video analysis (90 seconds - Flash is fast)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 90000);
+        
         const response = await fetch(analyzeUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'x-goog-api-key': config.gemini.apiKey
             },
+            signal: controller.signal,
             body: JSON.stringify({
                 contents: [{
                     parts: [
@@ -318,9 +352,11 @@ Be very precise about subject locations. If subjects move, provide multiple time
                     responseMimeType: 'application/json',
                     responseSchema: {
                         type: 'object',
+                        required: ['subjectBounds'],
                         properties: {
                             subjectBounds: {
                                 type: 'object',
+                                required: ['x', 'y', 'width', 'height'],
                                 properties: {
                                     x: { type: 'number' },
                                     y: { type: 'number' },
@@ -367,6 +403,8 @@ Be very precise about subject locations. If subjects move, provide multiple time
             })
         });
 
+        clearTimeout(timeoutId);
+        
         if (!response.ok) {
             const errorText = await response.text();
             throw new Error(`Analysis failed: ${response.status} - ${errorText}`);
@@ -393,6 +431,18 @@ Be very precise about subject locations. If subjects move, provide multiple time
             }
         }
 
+        // Ensure subjectBounds has all required fields with defaults
+        if (analysis.subjectBounds) {
+            analysis.subjectBounds = {
+                x: analysis.subjectBounds.x ?? 0.25,
+                y: analysis.subjectBounds.y ?? 0.1,
+                width: analysis.subjectBounds.width ?? 0.5,
+                height: analysis.subjectBounds.height ?? 0.8
+            };
+        } else {
+            analysis.subjectBounds = { x: 0.25, y: 0.1, width: 0.5, height: 0.8 };
+        }
+
         // Clean up uploaded file
         try {
             const fileUriParts = fileUri.split('/');
@@ -409,8 +459,12 @@ Be very precise about subject locations. If subjects move, provide multiple time
         console.log('Video analysis complete:', analysis);
         return analysis;
 
-    } catch (error) {
-        console.error('Video analysis error:', error);
+    } catch (error: unknown) {
+        if (error instanceof Error && error.name === 'AbortError') {
+            console.warn('Video analysis timed out after 90 seconds, using fallback zones');
+        } else {
+            console.error('Video analysis error:', error);
+        }
         // Return fallback safe zones
         return {
             safeRegions: [

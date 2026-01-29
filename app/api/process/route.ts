@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { join } from 'path';
 import { config as appConfig } from '@/lib/config';
-import { extractVideoInfo, compositeOverlays } from '@/lib/video-processor';
+import { extractVideoInfo, compositeOverlays, createHumanOutline } from '@/lib/video-processor';
 import { calculateSafeZones, calculateSmartSafeZones, generateScribbleSequence } from '@/lib/overlay-animator';
 import { analyzeVideoForPlacement } from '@/lib/gemini-client';
 
@@ -71,7 +71,7 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
     let analysisResult;
     
     try {
-        console.log('Starting video analysis with Gemini 3 Pro...');
+        console.log('Starting video analysis with Gemini 2.5 Flash...');
         analysisResult = await analyzeVideoForPlacement(inputPath);
         console.log('Analysis complete:', analysisResult);
         
@@ -137,8 +137,29 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
     // Get corner separator
     const cornerPath = join(publicDir, 'corners', 'corner_white_tl.png');
 
+    // Create human outline using AI segmentation (rembg)
+    jobs.set(jobId, { status: 'processing', progress: 35 });
+    const outlinePath = join(appConfig.api.outputDir, `outline-${videoId}.mov`);
+    let humanOutlinePath: string | null = null;
+    
+    try {
+        console.log('Creating human outline with AI segmentation...');
+        humanOutlinePath = await createHumanOutline(
+            inputPath,
+            outlinePath,
+            12, // stroke size
+            2   // sample every 2nd frame for speed
+        );
+        if (humanOutlinePath) {
+            console.log('Human outline created:', humanOutlinePath);
+        }
+    } catch (error) {
+        console.warn('Failed to create human outline, continuing without it:', error);
+        humanOutlinePath = null;
+    }
+
     // Composite overlays
-    jobs.set(jobId, { status: 'processing', progress: 40 });
+    jobs.set(jobId, { status: 'processing', progress: 50 });
 
     await compositeOverlays(
         inputPath,
@@ -150,9 +171,11 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
         videoInfo,
         (percent) => {
             // Update progress
-            const totalProgress = 40 + (percent / 100) * 50; // 40-90%
+            const totalProgress = 50 + (percent / 100) * 40; // 50-90%
             jobs.set(jobId, { status: 'processing', progress: Math.round(totalProgress) });
-        }
+        },
+        analysisResult?.subjectBounds,
+        humanOutlinePath
     );
 
     // Complete
