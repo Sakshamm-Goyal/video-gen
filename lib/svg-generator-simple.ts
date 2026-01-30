@@ -77,6 +77,7 @@ export function generateSimpleScribbleSVG(
             break;
 
         case 'motionLine':
+        case 'speedArrow':
             // Motion/speed lines
             let motionLines = '';
             for (let i = 0; i < 3; i++) {
