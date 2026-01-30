@@ -81,7 +81,7 @@ export function getContextualDoodles(
 /**
  * Detect scene context from keywords and mood
  */
-function detectSceneContext(keywords: string[], mood: string): SceneContext {
+export function detectSceneContext(keywords: string[], mood: string): SceneContext {
     const keywordStr = keywords.join(' ').toLowerCase();
 
     // Check for specific contexts

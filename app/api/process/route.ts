@@ -5,6 +5,8 @@ import { extractVideoInfo, compositeOverlays, extractForegroundAndOutline } from
 import { calculateSafeZones, calculateSmartSafeZones, generateScribbleSequence } from '@/lib/overlay-animator';
 import { analyzeVideoForPlacement, analyzeVideoTheme, generateThemedScribbleSVG, generateThemedPaperSVG } from '@/lib/gemini-client';
 import { generateEffectTimeline, EffectTimeline } from '@/lib/effect-scheduler';
+import { getContextualDoodles, prioritizeDoodles } from '@/lib/contextual-doodles';
+import { prepareDirectionalArrows } from '@/lib/arrow-rotator';
 import sharp from 'sharp';
 
 // In-memory job tracking (for MVP - use Redis/database in production)
@@ -168,36 +170,35 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
     ];
     console.log('Generating scribbles with VIBRANT colors (high saturation):', colorPalette);
 
-    // Generate themed scribbles using AI-suggested types and colors
+    // INTELLIGENT: Use contextual doodle selection based on scene analysis
+    const contextualRecommendation = getContextualDoodles(themeResult.mood, []);
+    const prioritizedTypes = prioritizeDoodles(
+        [...themeResult.suggestedScribbles, ...contextualRecommendation.types],
+        'general' // Will be refined with video keywords
+    );
+
+    console.log('Contextual doodle recommendation:', {
+        mood: themeResult.mood,
+        types: contextualRecommendation.types.slice(0, 5),
+        density: contextualRecommendation.density,
+        energy: contextualRecommendation.energyLevel
+    });
+
+    // Generate themed scribbles using AI-suggested + contextual types
     // OPTIMIZATION: Parallelize all SVG->PNG conversions
     const scribblePaths: string[] = [];
-    const scribbleTypes = themeResult.suggestedScribbles; // Use ALL types for maximum variety
+    const scribbleTypes: string[] = [];
+    const scribbleTypes_raw = prioritizedTypes; // Use intelligently prioritized types
     const totalScribbles = 12; // MINIMAL: FFmpeg crashes with more inputs
 
     // Prepare all scribble generation tasks
     const scribbleGenerationTasks = [];
 
-    // Generate first set with all unique types - SMALL SIZES for dense coverage
-    for (let i = 0; i < scribbleTypes.length; i++) {
-        const type = scribbleTypes[i];
-        const color = colorPalette[i % colorPalette.length];
-        const pngPath = join(tempAssetsDir, `scribble_${i + 1}.png`);
-        // LARGER: Increased sizes for better visibility (150-250px)
-        const baseSize = 150 + (i % 5) * 20;
-
-        scribbleGenerationTasks.push(
-            (async () => {
-                const svg = generateThemedScribbleSVG(type, color, baseSize);
-                await sharp(Buffer.from(svg)).png().toFile(pngPath);
-                return pngPath;
-            })()
-        );
-    }
-
-    // Generate additional scribbles with color variants for full-screen coverage
-    for (let i = scribbleTypes.length; i < totalScribbles; i++) {
-        const type = scribbleTypes[i % scribbleTypes.length];
-        const colorOffset = Math.floor(i / scribbleTypes.length);
+    // Generate scribbles with contextually prioritized types
+    for (let i = 0; i < totalScribbles; i++) {
+        const type = scribbleTypes_raw[i % scribbleTypes_raw.length];
+        scribbleTypes.push(type); // Track types for arrow rotation
+        const colorOffset = Math.floor(i / scribbleTypes_raw.length);
         const color = colorPalette[(i + colorOffset) % colorPalette.length];
         const pngPath = join(tempAssetsDir, `scribble_${i + 1}.png`);
         // LARGER: Increased sizes for better visibility (150-250px)
@@ -207,16 +208,17 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
             (async () => {
                 const svg = generateThemedScribbleSVG(type, color, baseSize);
                 await sharp(Buffer.from(svg)).png().toFile(pngPath);
-                return pngPath;
+                return { path: pngPath, type };
             })()
         );
     }
 
     // Execute all scribble generation in parallel (FAST!)
     const generatedScribbles = await Promise.all(scribbleGenerationTasks);
-    scribblePaths.push(...generatedScribbles);
+    generatedScribbles.forEach(s => scribblePaths.push(s.path));
 
-    console.log(`Generated ${scribblePaths.length} AI-themed scribbles with diverse types (parallel processing)`);
+    console.log(`Generated ${scribblePaths.length} contextually intelligent scribbles (parallel processing)`);
+    console.log('Scribble types:', scribbleTypes.slice(0, 6).join(', ') + '...');
 
     // Generate themed paper frames
     // OPTIMIZATION: Parallelize paper frame generation
@@ -266,6 +268,44 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
     console.log(`  - ${effectTimeline.scribbleBursts.length} scribble bursts (varying density, with quiet periods)`);
     console.log(`  - ${effectTimeline.paperAppearances.length} paper appearances (not always visible, with fade)`);
     console.log(`  - Energy level: ${effectTimeline.energyLevel}`);
+
+    // INTELLIGENT ARROWS: Pre-rotate arrows to point toward subject
+    jobs.set(jobId, { status: 'processing', progress: 33 });
+    if (analysisResult?.subjectBounds) {
+        try {
+            console.log('Applying intelligent arrow rotation toward subject...');
+            const subjectBounds = {
+                centerX: analysisResult.subjectBounds.x + (analysisResult.subjectBounds.width || videoInfo.width / 2) / 2,
+                centerY: analysisResult.subjectBounds.y + (analysisResult.subjectBounds.height || videoInfo.height / 2) / 2,
+                width: analysisResult.subjectBounds.width || videoInfo.width / 2,
+                height: analysisResult.subjectBounds.height || videoInfo.height / 2
+            };
+
+            const rotatedArrows = await prepareDirectionalArrows(
+                scribblePaths,
+                scribbleTypes,
+                subjectBounds,
+                videoInfo.width,
+                videoInfo.height,
+                tempAssetsDir
+            );
+
+            // Replace arrow scribbles with rotated versions
+            rotatedArrows.forEach((rotatedData, originalPath) => {
+                const index = scribblePaths.indexOf(originalPath);
+                if (index !== -1) {
+                    scribblePaths[index] = rotatedData.path;
+                    console.log(`  Rotated arrow ${index + 1} by ${Math.round(rotatedData.rotation)}° to point at subject`);
+                }
+            });
+
+            if (rotatedArrows.size > 0) {
+                console.log(`Applied intelligent rotation to ${rotatedArrows.size} directional arrows`);
+            }
+        } catch (error) {
+            console.warn('Failed to rotate arrows, using original positions:', error);
+        }
+    }
 
     // Use static corner from public directory
     const publicDir = join(process.cwd(), 'public', 'assets', 'overlays');
