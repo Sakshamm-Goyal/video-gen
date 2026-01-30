@@ -108,14 +108,29 @@ export default function Home() {
 
           {currentStep === 'complete' && (
             <div className="animate-fadeIn text-center space-y-6">
-              <div className="p-8 bg-white rounded-2xl shadow-lg max-w-2xl mx-auto">
+              <div className="p-8 bg-white rounded-2xl shadow-lg max-w-4xl mx-auto">
                 <div className="text-6xl mb-4">🎉</div>
                 <h2 className="text-2xl font-bold text-gray-800 mb-2">
                   Your video is ready!
                 </h2>
                 <p className="text-gray-600 mb-6">
-                  Download your video with beautiful hand-drawn overlays
+                  Preview and download your video with beautiful hand-drawn overlays
                 </p>
+                
+                {/* Video Preview */}
+                {outputUrl && (
+                  <div className="mb-6 rounded-lg overflow-hidden bg-black">
+                    <video
+                      src={`${outputUrl}?preview=true`}
+                      controls
+                      className="w-full max-h-96 mx-auto"
+                      preload="metadata"
+                    >
+                      Your browser does not support the video tag.
+                    </video>
+                  </div>
+                )}
+                
                 <div className="flex gap-4 justify-center">
                   <a
                     href={outputUrl}

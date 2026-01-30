@@ -126,15 +126,15 @@ async function generateImage(
  */
 export async function generateScribbleAsset(index: number): Promise<Blob> {
     const colors = ['neon pink', 'electric blue', 'lime green', 'bright yellow', 'vibrant purple', 'hot orange', 'cyan', 'magenta'];
-    const shapes = ['stars', 'swirls', 'zigzags', 'spirals', 'doodles', 'squiggles', 'arrows', 'hearts', 'circles', 'waves'];
+    const shapes = ['stars', 'swirls', 'zigzags', 'spirals', 'doodles', 'squiggles', 'arrows', 'hearts', 'circles', 'waves', 'scribble lines', 'messy hatching', 'quick sketches', 'smiley faces'];
 
     const randomColor = colors[Math.floor(Math.random() * colors.length)];
     const randomShape = shapes[Math.floor(Math.random() * shapes.length)];
 
-    const prompt = `Create a transparent-background sticker sprite of messy hand-drawn ${randomShape}, ${randomColor} color, playful marker texture, no text, thick strokes, high contrast, centered, digital art style, vibrant colors`;
+    const prompt = `Create a transparent-background sticker sprite of quick hand-drawn ${randomShape}, ${randomColor} color, ULTRA THIN BALLPOINT PEN LINES (1-2px), sketchy imperfect wobbly strokes like a kid drawing fast, no text, high contrast, centered, simple rough sketch style, vibrant colors, NOT thick marker NOT smooth vector`;
 
     try {
-        return await generateImage('imagen-3.0-generate-002', prompt, '1:1');
+        return await generateImage('imagen-4.0-fast-generate-001', prompt, '1:1');
     } catch (error) {
         console.error('Error generating scribble:', error);
         throw error;
@@ -143,25 +143,20 @@ export async function generateScribbleAsset(index: number): Promise<Blob> {
 
 /**
  * Generate paper frame texture using Imagen 3
+ * PAPER CORNERS ONLY: 4 torn corner pieces, center 70% transparent, scrapbook style.
+ * No full frame, no solid white background, no "photograph style".
  */
 export async function generatePaperFrame(index: number): Promise<Blob> {
-    const variations = [
-        'worn notebook paper edges, subtle creases',
-        'rough torn paper border, handmade texture',
-        'vintage paper frame, slight yellowing',
-        'craft paper edges, natural fiber texture',
-        'distressed paper border, coffee stains',
-        'recycled paper frame, rough edges',
-        'watercolor paper texture, organic border',
-        'canvas paper edges, artistic feel'
-    ];
-
-    const variation = variations[index % variations.length];
-
-    const prompt = `Create a paper frame border texture: ${variation}, slight stains, handmade cutout look, empty transparent center, 1920x1080, no text, photograph style, realistic paper texture`;
+    const prompt = `Create a PNG with transparent background (alpha channel).
+Only 4 torn paper corner pieces framing the edges (top-left, top-right, bottom-left, bottom-right).
+Handmade ripped edge, off-white/beige craft paper, subtle wrinkles and paper grain.
+Keep the center 70% completely transparent.
+No full rectangular frame, no solid white background, no text, no watermark.
+Scanned scrapbook collage look.
+Avoid: solid white background, full rectangular frame, filled center, borders covering the whole image, any text, photograph style.`;
 
     try {
-        return await generateImage('imagen-3.0-generate-002', prompt, '16:9');
+        return await generateImage('imagen-4.0-fast-generate-001', prompt, '16:9');
     } catch (error) {
         console.error('Error generating paper frame:', error);
         throw error;
@@ -169,14 +164,20 @@ export async function generatePaperFrame(index: number): Promise<Blob> {
 }
 
 /**
- * Generate white corner separator element
+ * Generate corner separator: torn paper corner piece only (not full frame).
+ * Transparent background, off-white/beige craft paper, scrapbook style.
  */
 export async function generateCornerSeparator(position: 'tl' | 'tr'): Promise<Blob> {
     const positionText = position === 'tl' ? 'top-left' : 'top-right';
-    const prompt = `Create a white painted foreground corner smear, soft feathered edge, like a white brush stroke overlay in the ${positionText} corner, 1920x1080, no text, artistic paint texture, translucent white paint effect`;
+    const prompt = `Create a PNG with transparent background (alpha channel).
+Single torn paper corner piece in the ${positionText} corner only.
+Handmade ripped edge, off-white/beige craft paper, subtle paper grain and wrinkles.
+Rest of image completely transparent. No full frame, no solid white background, no text.
+Scanned scrapbook collage look.
+Avoid: solid white background, full rectangular frame, photograph style.`;
 
     try {
-        return await generateImage('imagen-3.0-generate-002', prompt, '16:9');
+        return await generateImage('imagen-4.0-fast-generate-001', prompt, '16:9');
     } catch (error) {
         console.error('Error generating corner separator:', error);
         throw error;
@@ -184,13 +185,54 @@ export async function generateCornerSeparator(position: 'tl' | 'tr'): Promise<Bl
 }
 
 /**
+ * Retry helper for API calls with exponential backoff
+ */
+async function retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    maxRetries: number = 3,
+    initialDelayMs: number = 1000
+): Promise<T> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (error) {
+            lastError = error as Error;
+            if (attempt < maxRetries) {
+                const delay = initialDelayMs * Math.pow(2, attempt);
+                console.warn(`Attempt ${attempt + 1} failed, retrying in ${delay}ms:`, error);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+
+    throw lastError || new Error('Retry failed with unknown error');
+}
+
+/**
  * Upload video file to Gemini File API using resumable upload protocol
+ * ENHANCED: Retry logic for network failures
  */
 async function uploadVideoFile(videoPath: string): Promise<string> {
     const fs = require('fs');
+
+    // Validate file exists before attempting upload
+    try {
+        await fs.promises.access(videoPath);
+    } catch (error) {
+        throw new Error(`Video file not found at ${videoPath}`);
+    }
+
     const fileBuffer = fs.readFileSync(videoPath);
     const fileName = videoPath.split('/').pop() || 'video.mp4';
     const fileSize = fileBuffer.length;
+
+    if (fileSize === 0) {
+        throw new Error('Video file is empty');
+    }
+
+    console.log(`Uploading video: ${fileName} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
     
     // Step 1: Initiate resumable upload
     // Note: Upload endpoint is different from regular API base
@@ -301,9 +343,10 @@ export async function analyzeVideoForPlacement(videoPath: string): Promise<{
         }
 
         // Analyze video with Gemini 2.5 Flash (fast and reliable for video)
-        console.log('Analyzing video with Gemini 2.5 Flash...');
+        // ENHANCED: Wrap in retry logic for network resilience
+        console.log('Analyzing video with Gemini 2.5 Flash (with retry)...');
         const analyzeUrl = `${GEMINI_API_BASE}/models/gemini-2.5-flash:generateContent`;
-        
+
         const prompt = `Analyze this video to find where the MAIN SUBJECT (person, product, animal) is located.
 
 I need the bounding box of the main subject in normalized coordinates (0.0 to 1.0):
@@ -477,8 +520,65 @@ IMPORTANT: You MUST provide width and height values, not just x and y.`;
 }
 
 /**
+ * MASTER VIDEO DOODLE ANIMATION PROMPT
+ * Single long instruction for Gemini to plan the animation. Doodles are alive, imperfect, reactive—NOT digital motion graphics.
+ */
+const MASTER_VIDEO_DOODLE_PROMPT = `You are creating a playful hand-drawn animated doodle overlay on top of a real video.
+
+STYLE:
+Everything must look like it was drawn by hand with thick markers and crayons.
+Lines are imperfect, wobbly, uneven, slightly shaky.
+Nothing should look clean, vector, geometric, or digitally perfect.
+
+GENERAL RULES:
+- All doodles appear as if drawn frame-by-frame
+- Slight jitter exists between frames (boiling line effect)
+- Stroke thickness subtly changes over time
+- No text, no typography, no symbols with letters
+- Colors are bright and childlike: red, blue, yellow, green, purple, cyan, orange
+- Background remains the original video (doodles are transparent overlays)
+
+SUBJECT RELATIONSHIP:
+- The main subject is always respected
+- Doodles NEVER cover the subject's face or body
+- Doodles react to subject motion, pose, and direction
+- The subject has a white hand-drawn outline that slightly wiggles every frame, is thicker near feet and hands, looks sketched not traced perfectly
+
+DOODLE TYPES USED:
+Spirals, swirls, curls; stars (imperfect, hand-drawn); hearts (messy, asymmetrical); smiley faces, eyes, noses, simple cartoon faces; zigzags, squiggles, waves; arrows (curved, looping, playful); scribble shading patches; motion arcs and speed lines; dots, bursts, confetti marks.
+
+ANIMATION BEHAVIOR (VERY IMPORTANT):
+- Doodles appear by being "drawn on" over 3–8 frames; lines grow from start to end like a hand drawing
+- After appearing, doodles gently wobble or pulse; some fade out softly, others stay until cut
+- When subject moves forward: curved motion lines behind them, arrows in direction of movement
+- When subject lifts foot or jumps: vibration lines near feet, small stars or dots pop briefly
+- When subject pauses: doodles slow down, spirals gently rotate
+- Faster movement = more energetic doodles; slower movement = calmer doodles
+
+SPATIAL PLACEMENT:
+Most doodles live around the subject, not on them. Heavier density near edges of frame. Center area kept cleaner for subject visibility.
+
+TIMING & RHYTHM:
+No two doodles animate at the exact same time. Small delays between appearances. Randomized but intentional timing. Feels playful, human, imperfect.
+
+TRANSITIONS:
+Occasionally use hand-drawn paper rip or scribble wipe. Transitions look like torn paper or marker strokes—never smooth digital wipes.
+
+ENDING:
+Doodles slowly calm down. Fewer new elements appear. Final frame holds with subtle wobble. No hard cuts, no sharp motion stop.
+
+MOOD:
+Playful, joyful, scrapbook, childlike creativity. Feels like a sketchbook came alive on top of real life.
+
+CHECKLIST (output must satisfy):
+- Doodles look redrawn every frame / lines slightly shaky
+- Doodles respond to movement direction
+- Subject is always clean and readable
+- Feels like a kid drew it, not a designer`;
+
+/**
  * Analyze video to suggest creative theme, mood, and scribble styles
- * Uses Gemini 2.5 Flash for fast creative analysis
+ * Uses MASTER VIDEO DOODLE prompt so Gemini plans frame-by-frame, reactive, hand-drawn animation
  */
 export async function analyzeVideoTheme(videoPath: string): Promise<{
     mood: string;
@@ -518,24 +618,24 @@ export async function analyzeVideoTheme(videoPath: string): Promise<{
             throw new Error('File processing timeout');
         }
 
-        // Analyze with Gemini
-        const analyzeUrl = `${GEMINI_API_BASE}/models/gemini-2.5-flash:generateContent`;
-        
-        const prompt = `Analyze this video's visual style, mood, and energy to suggest creative handdrawn style doodle only overlay decorations best way properly.
+        // Analyze with Gemini using MASTER VIDEO DOODLE prompt
+        const analyzeUrl = GEMINI_API_BASE + '/models/gemini-2.5-flash:generateContent';
 
-Return JSON with:
-{
-  "mood": "playful/energetic/calm/romantic/edgy/vintage/modern",
-  "colorPalette": ["#color1", "#color2", "#color3", "#color4", "#color5"],
-  "suggestedScribbles": ["heart", "star", "squiggle", "smiley", "wave", "lightning", "flower", "brushStroke", "spiral", "splatter", "crown", "moon"],
-  "paperStyle": "warm-beige/cool-blue/pink-salmon/mint-green/vintage-sepia/clean-white",
-  "energyLevel": "calm/moderate/energetic"
-}
-
-- colorPalette: 5 vivid hex colors that complement and contrast with the video
-- suggestedScribbles: pick 10-15 DIVERSE hand-drawn scribble types for variety (from: heart, star, spiral, smiley, zigzag, arrow, circle, xmark, sun, squiggle, scribbleLine, wave, underline, doubleScribble, dots, lightning, exclaim, question, crosshatch, flower, curvedArrow, brushStroke, splatter, stickFigure) - prefer messy organic types like squiggle, scribbleLine, wave, brushStroke, underline for hand-drawn feel
-- paperStyle: what paper/border style fits best
-- energyLevel: calm/moderate/energetic based on video pace and action`;
+        const prompt = MASTER_VIDEO_DOODLE_PROMPT + '\n\n---\n\n' +
+            'Analyze THIS video. Plan the doodle animation so it follows the rules above. Return JSON:\n' +
+            '{\n' +
+            '  "mood": "playful/energetic/calm/romantic/edgy/vintage/modern",\n' +
+            '  "colorPalette": ["#color1", "#color2", "#color3", "#color4", "#color5"],\n' +
+            '  "suggestedScribbles": ["type1", "type2", ...],\n' +
+            '  "paperStyle": "warm-beige/cool-blue/pink-salmon/mint-green/vintage-sepia/clean-white",\n' +
+            '  "energyLevel": "calm/moderate/energetic"\n' +
+            '}\n\n' +
+            'STRICT RULES:\n' +
+            '- colorPalette: EXACTLY 5 SUPER VIBRANT hex colors. REQUIRED COLORS: Must include at least one from each group: (1) Bright Red (#FF0000 to #FF3366), (2) Electric Blue (#0080FF to #3399FF), (3) Sunny Yellow (#FFD700 to #FFFF00), (4) Vivid Green (#00FF00 to #66FF66), (5) Bold Purple/Magenta (#FF00FF to #9933FF) or Orange (#FF6600 to #FF9900). NO WHITE, NO BEIGE, NO PASTEL, NO LIGHT COLORS. Saturation must be >70%, brightness >50%. Think CRAYOLA markers, not design pastels. Example good palette: ["#FF1744", "#00B0FF", "#FFD600", "#00E676", "#D500F9"]\n' +
+            '- suggestedScribbles: Pick 14-18 types for MAXIMUM VARIETY. Use ONLY these hand-drawn types (our engine supports them): spiral, squiggle, scribbleLine, wave, brushStroke, heart, star, smiley, zigzag, arrow, speedArrow, doubleArrow, curvedArrow, lightning, circle, dots, splatter, doubleScribble, underline, crosshatch, flower, sun, stickFigure. MUST include motion-reactive types: arrow, speedArrow, curvedArrow, lightning, spiral, wave so doodles feel like they react to subject movement. Mix directional and organic—constantly changing, frame-by-frame feel. Include at least 3 stars, 2 hearts, 2 smiley faces, 3 arrows for fun, playful variety.\n' +
+            '- paperStyle: best paper/border for the mood (torn paper / scribble wipe feel).\n' +
+            '- energyLevel: from video pace. Higher energy = more bursts, faster-changing doodles; calm = slower, fewer.\n\n' +
+            'REMEMBER: Doodles are drawn over multiple frames, imperfect, uneven, jitter. They REACT to subject motion. Subject is never covered. Kid-drawn, not designer. COLORS MUST POP like the reference images with bright markers.';
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 60000);
@@ -550,11 +650,11 @@ Return JSON with:
             body: JSON.stringify({
                 contents: [{
                     parts: [
-                        { 
-                            fileData: { 
-                                fileUri: fileUri.startsWith('https://') ? fileUri : `https://generativelanguage.googleapis.com/v1beta/${fileUri.startsWith('files/') ? fileUri : 'files/' + fileUri.split('/').pop()}`,
-                                mimeType: 'video/mp4' 
-                            } 
+                        {
+                            fileData: {
+                                fileUri: fileUri.startsWith('https://') ? fileUri : 'https://generativelanguage.googleapis.com/v1beta/' + (fileUri.startsWith('files/') ? fileUri : 'files/' + fileUri.split('/').pop()),
+                                mimeType: 'video/mp4'
+                            }
                         },
                         { text: prompt }
                     ]
@@ -577,14 +677,14 @@ Return JSON with:
         });
 
         clearTimeout(timeoutId);
-        
+
         if (!response.ok) {
-            throw new Error(`Theme analysis failed: ${response.status}`);
+            throw new Error('Theme analysis failed: ' + response.status);
         }
 
         const data = await response.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        
+
         if (!text) {
             throw new Error('No theme analysis returned');
         }
@@ -593,10 +693,17 @@ Return JSON with:
         try {
             theme = JSON.parse(text);
         } catch (e) {
-            const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/```\s*([\s\S]*?)\s*```/);
-            if (jsonMatch) {
-                theme = JSON.parse(jsonMatch[1]);
-            } else {
+            // Try to extract JSON from markdown code blocks
+            const codeBlockMarker = String.fromCharCode(96) + String.fromCharCode(96) + String.fromCharCode(96);
+            let jsonStr = text;
+            if (text.includes(codeBlockMarker + 'json')) {
+                jsonStr = text.split(codeBlockMarker + 'json')[1].split(codeBlockMarker)[0].trim();
+            } else if (text.includes(codeBlockMarker)) {
+                jsonStr = text.split(codeBlockMarker)[1].split(codeBlockMarker)[0].trim();
+            }
+            try {
+                theme = JSON.parse(jsonStr);
+            } catch (e2) {
                 throw new Error('Could not parse theme result');
             }
         }
@@ -606,404 +713,17 @@ Return JSON with:
 
     } catch (error) {
         console.error('Theme analysis error:', error);
-        // Return diverse default theme
+        // Return VIBRANT default theme with super bright colors (like reference images)
         return {
             mood: 'playful',
-            colorPalette: ['#FF6B6B', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181'],
-            suggestedScribbles: ['squiggle', 'scribbleLine', 'wave', 'brushStroke', 'underline', 'heart', 'star', 'smiley', 'spiral', 'dots', 'splatter', 'zigzag', 'curvedArrow', 'doubleScribble', 'crosshatch'],
+            colorPalette: ['#FF1744', '#2979FF', '#FFD600', '#00E676', '#D500F9'], // Vibrant red, blue, yellow, green, purple
+            suggestedScribbles: ['spiral', 'squiggle', 'scribbleLine', 'wave', 'crosshatch', 'arrow', 'speedArrow', 'curvedArrow', 'lightning', 'heart', 'star', 'smiley', 'zigzag', 'dots', 'splatter', 'brushStroke', 'doubleScribble', 'circle', 'flower', 'underline'],
             paperStyle: 'warm-beige',
             energyLevel: 'moderate'
         };
     }
 }
 
-/**
+// Export simplified SVG generators (complex template literal versions commented out due to build issues)
+export { generateSimpleScribbleSVG as generateThemedScribbleSVG, generateSimplePaperSVG as generateThemedPaperSVG } from './svg-generator-simple';
 
-
-
-
-
-* Add hand-drawn wobble to a path by adding noise to control points
- * This makes shapes look like they were drawn with a shaky hand
- */
-function addWobble(value: number, intensity: number = 3, seed: number = 0): number {
-    const noise = Math.sin(seed * 12.9898 + value * 78.233) * intensity;
-    return value + noise;
-}
-
-/**
- * Generate a wobbly path string for hand-drawn effect
- */
-function wobblePath(points: Array<{x: number, y: number}>, seed: number = 0): string {
-    if (points.length < 2) return '';
-    
-    const wobbleIntensity = 2.5;
-    let d = `M${addWobble(points[0].x, wobbleIntensity, seed)} ${addWobble(points[0].y, wobbleIntensity, seed + 1)}`;
-    
-    for (let i = 1; i < points.length; i++) {
-        const p = points[i];
-        const wobbleX = addWobble(p.x, wobbleIntensity, seed + i * 2);
-        const wobbleY = addWobble(p.y, wobbleIntensity, seed + i * 2 + 1);
-        
-        // Use quadratic curves for smoother hand-drawn look
-        if (i < points.length - 1) {
-            const next = points[i + 1];
-            const cpX = wobbleX + (Math.random() - 0.5) * 4;
-            const cpY = wobbleY + (Math.random() - 0.5) * 4;
-            d += ` Q${cpX.toFixed(1)} ${cpY.toFixed(1)} ${addWobble(next.x, wobbleIntensity, seed + i * 3).toFixed(1)} ${addWobble(next.y, wobbleIntensity, seed + i * 3 + 1).toFixed(1)}`;
-            i++; // Skip next point as we used it
-        } else {
-            d += ` L${wobbleX.toFixed(1)} ${wobbleY.toFixed(1)}`;
-        }
-    }
-    
-    return d;
-}
-
-/**
- * Generate HAND-DRAWN style scribble SVGs
- * Features: wobbly lines, rough strokes, marker texture, imperfect shapes
- */
-export function generateThemedScribbleSVG(
-    type: string,
-    color: string,
-    size: number = 200
-): string {
-    // THICK strokes for bold marker look
-    const sw = Math.max(6, size / 14);
-    const seed = type.charCodeAt(0) + color.charCodeAt(1);
-    
-    // Roughness filter for hand-drawn texture
-    const roughFilter = `
-        <filter id="rough${seed}" x="-20%" y="-20%" width="140%" height="140%">
-            <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="3" result="noise"/>
-            <feDisplacementMap in="SourceGraphic" in2="noise" scale="2" xChannelSelector="R" yChannelSelector="G"/>
-        </filter>
-    `;
-    
-    // Generate wobbly hand-drawn shapes
-    const generateWobblyCircle = (cx: number, cy: number, r: number, s: number) => {
-        const points: Array<{x: number, y: number}> = [];
-        const segments = 12;
-        for (let i = 0; i <= segments; i++) {
-            const angle = (i / segments) * Math.PI * 2;
-            const wobbleR = r + (Math.sin(s + i * 2.5) * r * 0.08);
-            points.push({
-                x: cx + Math.cos(angle) * wobbleR,
-                y: cy + Math.sin(angle) * wobbleR
-            });
-        }
-        return wobblePath(points, s) + 'Z';
-    };
-    
-    const scribbleShapes: Record<string, string> = {
-        // MESSY hand-drawn heart
-        heart: `<path d="${(() => {
-            const pts = [];
-            for (let t = 0; t <= 1; t += 0.05) {
-                const angle = t * Math.PI * 2;
-                const x = size/2 + (16 * Math.pow(Math.sin(angle), 3)) * (size/50) + (Math.random()-0.5)*3;
-                const y = size/2 - (13 * Math.cos(angle) - 5 * Math.cos(2*angle) - 2 * Math.cos(3*angle) - Math.cos(4*angle)) * (size/50) + (Math.random()-0.5)*3;
-                pts.push({x, y});
-            }
-            return wobblePath(pts, seed) + 'Z';
-        })()}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>`,
-        
-        // WOBBLY star (hand-drawn style)
-        star: `<path d="${(() => {
-            const pts = [];
-            const cx = size/2, cy = size/2;
-            for (let i = 0; i < 10; i++) {
-                const angle = (i * Math.PI / 5) - Math.PI / 2;
-                const r = i % 2 === 0 ? size * 0.4 : size * 0.18;
-                pts.push({
-                    x: cx + Math.cos(angle) * r + (Math.random()-0.5)*4,
-                    y: cy + Math.sin(angle) * r + (Math.random()-0.5)*4
-                });
-            }
-            pts.push(pts[0]); // Close
-            return wobblePath(pts, seed);
-        })()}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" filter="url(#rough${seed})"/>`,
-        
-        // MESSY spiral scribble
-        spiral: `<path d="M${size/2} ${size/2} ${(() => {
-            let d = '';
-            for (let i = 0; i < 3; i++) {
-                const r1 = size * 0.08 + i * size * 0.12;
-                const r2 = r1 + size * 0.12;
-                d += ` Q${size/2 + r1 + (Math.random()-0.5)*5} ${size/2 - r1/2 + (Math.random()-0.5)*4} ${size/2 + r2} ${size/2 + (Math.random()-0.5)*4}`;
-                d += ` Q${size/2 + r2 + (Math.random()-0.5)*5} ${size/2 + r2/2 + (Math.random()-0.5)*4} ${size/2} ${size/2 + r2 + (Math.random()-0.5)*4}`;
-                d += ` Q${size/2 - r2/2 + (Math.random()-0.5)*5} ${size/2 + r2 + (Math.random()-0.5)*4} ${size/2 - r2} ${size/2 + (Math.random()-0.5)*4}`;
-            }
-            return d;
-        })()}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>`,
-        
-        // WOBBLY smiley face
-        smiley: `<path d="${generateWobblyCircle(size/2, size/2, size*0.38, seed)}" fill="none" stroke="${color}" stroke-width="${sw}" filter="url(#rough${seed})"/>
-            <ellipse cx="${size*0.36}" cy="${size*0.42}" rx="${size*0.055}" ry="${size*0.07}" fill="${color}" transform="rotate(${-5 + Math.random()*10} ${size*0.36} ${size*0.42})"/>
-            <ellipse cx="${size*0.64}" cy="${size*0.42}" rx="${size*0.055}" ry="${size*0.07}" fill="${color}" transform="rotate(${-5 + Math.random()*10} ${size*0.64} ${size*0.42})"/>
-            <path d="M${size*0.3} ${size*0.58} Q${size*0.38 + (Math.random()-0.5)*5} ${size*0.72 + (Math.random()-0.5)*4} ${size/2} ${size*0.72} Q${size*0.62 + (Math.random()-0.5)*5} ${size*0.72 + (Math.random()-0.5)*4} ${size*0.7} ${size*0.58}" fill="none" stroke="${color}" stroke-width="${sw*0.9}" stroke-linecap="round" filter="url(#rough${seed})"/>`,
-        
-        // MESSY zigzag
-        zigzag: `<path d="M${size*0.08 + (Math.random()-0.5)*4} ${size*0.35} L${size*0.28 + (Math.random()-0.5)*5} ${size*0.7 + (Math.random()-0.5)*4} L${size*0.48 + (Math.random()-0.5)*5} ${size*0.3 + (Math.random()-0.5)*4} L${size*0.68 + (Math.random()-0.5)*5} ${size*0.7 + (Math.random()-0.5)*4} L${size*0.92 + (Math.random()-0.5)*4} ${size*0.35}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" filter="url(#rough${seed})"/>`,
-        
-        // HAND-DRAWN arrow
-        arrow: `<path d="M${size*0.15 + (Math.random()-0.5)*3} ${size*0.5 + (Math.random()-0.5)*4} L${size*0.82 + (Math.random()-0.5)*3} ${size*0.5 + (Math.random()-0.5)*4}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>
-            <path d="M${size*0.62 + (Math.random()-0.5)*3} ${size*0.32} L${size*0.85} ${size*0.5} L${size*0.62 + (Math.random()-0.5)*3} ${size*0.68}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" filter="url(#rough${seed})"/>`,
-        
-        // WOBBLY circle (imperfect)
-        circle: `<path d="${generateWobblyCircle(size/2, size/2, size*0.36, seed)}" fill="none" stroke="${color}" stroke-width="${sw}" filter="url(#rough${seed})"/>`,
-        
-        // MESSY X mark
-        xmark: `<path d="M${size*0.22 + (Math.random()-0.5)*4} ${size*0.22 + (Math.random()-0.5)*4} L${size*0.78 + (Math.random()-0.5)*4} ${size*0.78 + (Math.random()-0.5)*4}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>
-            <path d="M${size*0.78 + (Math.random()-0.5)*4} ${size*0.22 + (Math.random()-0.5)*4} L${size*0.22 + (Math.random()-0.5)*4} ${size*0.78 + (Math.random()-0.5)*4}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>`,
-        
-        // HAND-DRAWN sun with wobbly rays
-        sun: `<path d="${generateWobblyCircle(size/2, size/2, size*0.14, seed)}" fill="none" stroke="${color}" stroke-width="${sw}" filter="url(#rough${seed})"/>
-            ${[0, 45, 90, 135, 180, 225, 270, 315].map((angle, i) => {
-                const rad = (angle * Math.PI) / 180;
-                const x1 = size/2 + Math.cos(rad) * size * 0.22 + (Math.random()-0.5)*3;
-                const y1 = size/2 + Math.sin(rad) * size * 0.22 + (Math.random()-0.5)*3;
-                const x2 = size/2 + Math.cos(rad) * size * 0.4 + (Math.random()-0.5)*4;
-                const y2 = size/2 + Math.sin(rad) * size * 0.4 + (Math.random()-0.5)*4;
-                return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${sw*0.8}" stroke-linecap="round" filter="url(#rough${seed})"/>`;
-            }).join('')}`,
-        
-        // MESSY squiggle line
-        squiggle: `<path d="M${size*0.1} ${size*0.5} C${size*0.2 + (Math.random()-0.5)*8} ${size*0.2 + (Math.random()-0.5)*10} ${size*0.35 + (Math.random()-0.5)*8} ${size*0.8 + (Math.random()-0.5)*10} ${size*0.5} ${size*0.45} C${size*0.65 + (Math.random()-0.5)*8} ${size*0.1 + (Math.random()-0.5)*10} ${size*0.75 + (Math.random()-0.5)*8} ${size*0.85 + (Math.random()-0.5)*10} ${size*0.9} ${size*0.55}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>`,
-        
-        // RANDOM scribble lines (very hand-drawn)
-        scribbleLine: `<path d="M${size*0.1} ${size*0.4 + (Math.random()-0.5)*15} Q${size*0.3} ${size*0.2 + (Math.random()-0.5)*20} ${size*0.45} ${size*0.55 + (Math.random()-0.5)*15} T${size*0.7} ${size*0.35 + (Math.random()-0.5)*20} T${size*0.9} ${size*0.6 + (Math.random()-0.5)*15}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>`,
-        
-        // WOBBLY wave
-        wave: `<path d="M${size*0.05} ${size*0.5} Q${size*0.18 + (Math.random()-0.5)*5} ${size*0.25 + (Math.random()-0.5)*8} ${size*0.35} ${size*0.5 + (Math.random()-0.5)*5} T${size*0.65} ${size*0.5 + (Math.random()-0.5)*5} T${size*0.95} ${size*0.5 + (Math.random()-0.5)*5}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>`,
-        
-        // MESSY underline (like highlighting)
-        underline: `<path d="M${size*0.08} ${size*0.6} Q${size*0.25 + (Math.random()-0.5)*10} ${size*0.55 + (Math.random()-0.5)*8} ${size*0.5} ${size*0.62 + (Math.random()-0.5)*6} T${size*0.92} ${size*0.58 + (Math.random()-0.5)*8}" fill="none" stroke="${color}" stroke-width="${sw*1.5}" stroke-linecap="round" filter="url(#rough${seed})"/>`,
-        
-        // DOUBLE scribble line
-        doubleScribble: `<path d="M${size*0.08} ${size*0.38} Q${size*0.5} ${size*0.25 + (Math.random()-0.5)*15} ${size*0.92} ${size*0.42 + (Math.random()-0.5)*10}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>
-            <path d="M${size*0.08} ${size*0.62} Q${size*0.5} ${size*0.75 + (Math.random()-0.5)*15} ${size*0.92} ${size*0.58 + (Math.random()-0.5)*10}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>`,
-        
-        // RANDOM dots cluster
-        dots: `${Array.from({length: 6 + Math.floor(Math.random()*4)}, (_, i) => {
-            const x = size * (0.2 + Math.random() * 0.6);
-            const y = size * (0.2 + Math.random() * 0.6);
-            const r = size * (0.03 + Math.random() * 0.05);
-            return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" filter="url(#rough${seed})"/>`;
-        }).join('')}`,
-        
-        // WOBBLY lightning bolt
-        lightning: `<path d="M${size*0.55 + (Math.random()-0.5)*5} ${size*0.08} L${size*0.32 + (Math.random()-0.5)*5} ${size*0.45 + (Math.random()-0.5)*5} L${size*0.52 + (Math.random()-0.5)*4} ${size*0.48} L${size*0.38 + (Math.random()-0.5)*5} ${size*0.92}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" filter="url(#rough${seed})"/>`,
-        
-        // HAND-DRAWN exclamation
-        exclaim: `<path d="M${size*0.5 + (Math.random()-0.5)*4} ${size*0.12} L${size*0.5 + (Math.random()-0.5)*6} ${size*0.58}" stroke="${color}" stroke-width="${sw*1.8}" stroke-linecap="round" filter="url(#rough${seed})"/>
-            <ellipse cx="${size*0.5}" cy="${size*0.78}" rx="${size*0.06}" ry="${size*0.065}" fill="${color}" transform="rotate(${(Math.random()-0.5)*15} ${size*0.5} ${size*0.78})" filter="url(#rough${seed})"/>`,
-        
-        // MESSY question mark
-        question: `<path d="M${size*0.32 + (Math.random()-0.5)*4} ${size*0.28} Q${size*0.32} ${size*0.12 + (Math.random()-0.5)*4} ${size*0.5} ${size*0.12 + (Math.random()-0.5)*3} Q${size*0.72 + (Math.random()-0.5)*4} ${size*0.12} ${size*0.72 + (Math.random()-0.5)*4} ${size*0.32} Q${size*0.72} ${size*0.48 + (Math.random()-0.5)*4} ${size*0.5 + (Math.random()-0.5)*3} ${size*0.55} L${size*0.5 + (Math.random()-0.5)*4} ${size*0.65}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>
-            <ellipse cx="${size*0.5}" cy="${size*0.8}" rx="${size*0.05}" ry="${size*0.055}" fill="${color}" filter="url(#rough${seed})"/>`,
-        
-        // CROSSHATCH scribble
-        crosshatch: `${Array.from({length: 4}, (_, i) => {
-            const y = size * (0.25 + i * 0.15) + (Math.random()-0.5)*8;
-            return `<line x1="${size*0.15 + (Math.random()-0.5)*5}" y1="${y}" x2="${size*0.85 + (Math.random()-0.5)*5}" y2="${y + (Math.random()-0.5)*10}" stroke="${color}" stroke-width="${sw*0.7}" stroke-linecap="round" filter="url(#rough${seed})"/>`;
-        }).join('')}
-        ${Array.from({length: 4}, (_, i) => {
-            const x = size * (0.25 + i * 0.15) + (Math.random()-0.5)*8;
-            return `<line x1="${x}" y1="${size*0.15 + (Math.random()-0.5)*5}" x2="${x + (Math.random()-0.5)*10}" y2="${size*0.85 + (Math.random()-0.5)*5}" stroke="${color}" stroke-width="${sw*0.7}" stroke-linecap="round" filter="url(#rough${seed})"/>`;
-        }).join('')}`,
-        
-        // WOBBLY flower
-        flower: `<circle cx="${size/2}" cy="${size/2}" r="${size*0.08}" fill="${color}" filter="url(#rough${seed})"/>
-            ${[0, 60, 120, 180, 240, 300].map((angle, i) => {
-                const rad = (angle * Math.PI) / 180;
-                const px = size/2 + Math.cos(rad) * size * 0.22;
-                const py = size/2 + Math.sin(rad) * size * 0.22;
-                return `<ellipse cx="${px}" cy="${py}" rx="${size*0.08}" ry="${size*0.14}" fill="none" stroke="${color}" stroke-width="${sw*0.8}" transform="rotate(${angle + 90 + (Math.random()-0.5)*10} ${px} ${py})" filter="url(#rough${seed})"/>`;
-            }).join('')}`,
-        
-        // MESSY curved arrow
-        curvedArrow: `<path d="M${size*0.18 + (Math.random()-0.5)*4} ${size*0.72} Q${size*0.18} ${size*0.28 + (Math.random()-0.5)*8} ${size*0.5 + (Math.random()-0.5)*5} ${size*0.28} T${size*0.82} ${size*0.52 + (Math.random()-0.5)*5}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>
-            <path d="M${size*0.68 + (Math.random()-0.5)*3} ${size*0.38} L${size*0.82} ${size*0.52} L${size*0.68 + (Math.random()-0.5)*3} ${size*0.66}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" filter="url(#rough${seed})"/>`,
-        
-        // BRUSH stroke (thick messy)
-        brushStroke: `<path d="M${size*0.08} ${size*0.55 + (Math.random()-0.5)*15} Q${size*0.35} ${size*0.35 + (Math.random()-0.5)*20} ${size*0.55} ${size*0.52 + (Math.random()-0.5)*15} T${size*0.92} ${size*0.45 + (Math.random()-0.5)*20}" fill="none" stroke="${color}" stroke-width="${sw*2.5}" stroke-linecap="round" opacity="0.85" filter="url(#rough${seed})"/>`,
-        
-        // PAINT splatter
-        splatter: `<circle cx="${size/2}" cy="${size/2}" r="${size*0.14}" fill="${color}" filter="url(#rough${seed})"/>
-            ${Array.from({length: 8}, () => {
-                const angle = Math.random() * Math.PI * 2;
-                const dist = size * (0.18 + Math.random() * 0.25);
-                const x = size/2 + Math.cos(angle) * dist;
-                const y = size/2 + Math.sin(angle) * dist;
-                const r = size * (0.02 + Math.random() * 0.04);
-                return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" filter="url(#rough${seed})"/>`;
-            }).join('')}`,
-        
-        // SIMPLE stick figure
-        stickFigure: `<circle cx="${size/2}" cy="${size*0.18}" r="${size*0.1}" fill="none" stroke="${color}" stroke-width="${sw}" filter="url(#rough${seed})"/>
-            <line x1="${size/2 + (Math.random()-0.5)*3}" y1="${size*0.28}" x2="${size/2 + (Math.random()-0.5)*4}" y2="${size*0.58}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>
-            <line x1="${size*0.28 + (Math.random()-0.5)*4}" y1="${size*0.42 + (Math.random()-0.5)*4}" x2="${size*0.72 + (Math.random()-0.5)*4}" y2="${size*0.42 + (Math.random()-0.5)*4}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>
-            <line x1="${size/2}" y1="${size*0.58}" x2="${size*0.32 + (Math.random()-0.5)*4}" y2="${size*0.88}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>
-            <line x1="${size/2}" y1="${size*0.58}" x2="${size*0.68 + (Math.random()-0.5)*4}" y2="${size*0.88}" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" filter="url(#rough${seed})"/>`,
-    };
-    
-    const shape = scribbleShapes[type] || scribbleShapes.squiggle;
-    
-    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
-        <defs>${roughFilter}</defs>
-        ${shape}
-    </svg>`;
-}
-
-/**
- * Generate BEAUTIFUL scrapbook paper border - torn paper edges creating a frame
- * The paper pieces frame the edges while keeping center clear for the subject
- */
-export function generateThemedPaperSVG(
-    style: string,
-    variant: number,
-    width: number = 1280,
-    height: number = 720
-): string {
-    // Warm, craft paper color palettes
-    const colorPalettes: Record<string, string[]> = {
-        'warm-beige': ['#F5E6D3', '#EAD9C4', '#DFC9AE', '#D4B998', '#F0DCC5', '#E5D0B5'],
-        'cool-blue': ['#E8F0F5', '#D4E4ED', '#C0D8E5', '#ACCBDD', '#98BFD5', '#B8D4E8'],
-        'pink-salmon': ['#F5E8E6', '#EDD4D0', '#E5C0BA', '#DDACA4', '#D5988E', '#EACAC4'],
-        'mint-green': ['#E8F5EE', '#D4EDE2', '#C0E5D6', '#ACDDCA', '#98D5BE', '#C8EAD8'],
-        'vintage-sepia': ['#EAE0D0', '#DDD0BB', '#D0C0A6', '#C3B091', '#B6A07C', '#E0D4C0'],
-        'clean-white': ['#FAF8F5', '#F5F2ED', '#F0ECE5', '#EBE6DD', '#E6E0D5', '#FFFFFF']
-    };
-    
-    const colors = colorPalettes[style] || colorPalettes['warm-beige'];
-    
-    // Paper frame configurations - CORNER FOCUSED for clean center
-    // Each config creates a beautiful torn paper border
-    const configs = [
-        // Variant 0: Corner pieces - classic scrapbook look
-        [
-            { x: -30, y: -25, w: 220, h: 200, rot: -5 },      // Top-left
-            { x: width - 200, y: -30, w: 240, h: 190, rot: 6 }, // Top-right
-            { x: -35, y: height - 180, w: 230, h: 220, rot: 8 }, // Bottom-left
-            { x: width - 210, y: height - 190, w: 250, h: 230, rot: -7 }, // Bottom-right
-        ],
-        // Variant 1: Offset corners with overlap
-        [
-            { x: -40, y: -20, w: 250, h: 180, rot: -3 },
-            { x: width - 180, y: -35, w: 220, h: 200, rot: 4 },
-            { x: -25, y: height - 200, w: 200, h: 240, rot: 6 },
-            { x: width - 230, y: height - 170, w: 270, h: 210, rot: -5 },
-        ],
-        // Variant 2: Larger corner pieces
-        [
-            { x: -50, y: -40, w: 280, h: 240, rot: -6 },
-            { x: width - 250, y: -45, w: 300, h: 260, rot: 8 },
-            { x: -45, y: height - 230, w: 290, h: 270, rot: 10 },
-            { x: width - 270, y: height - 220, w: 320, h: 260, rot: -8 },
-        ],
-        // Variant 3: Asymmetric artistic
-        [
-            { x: -35, y: -30, w: 200, h: 220, rot: -4 },
-            { x: width - 220, y: -25, w: 260, h: 180, rot: 5 },
-            { x: -30, y: height - 220, w: 240, h: 260, rot: 7 },
-            { x: width - 200, y: height - 200, w: 240, h: 240, rot: -6 },
-        ],
-    ];
-    
-    const pieces = configs[variant % configs.length];
-    
-    let svgPieces = '';
-    pieces.forEach((piece, i) => {
-        const color = colors[i % colors.length];
-        const darkerColor = colors[(i + 3) % colors.length];
-        
-        // Create torn paper path with irregular edges
-        const tornPath = createTornPaperPath(piece.w, piece.h, i + variant);
-        
-        svgPieces += `
-            <g transform="translate(${piece.x}, ${piece.y}) rotate(${piece.rot})">
-                <!-- Soft shadow -->
-                <path d="${tornPath}" fill="rgba(0,0,0,0.12)" transform="translate(6, 6)" filter="url(#paperBlur${variant})"/>
-                <!-- Main paper piece with texture -->
-                <path d="${tornPath}" fill="${color}" filter="url(#paperTexture${variant})"/>
-                <!-- Inner edge shadow for depth -->
-                <path d="${tornPath}" fill="none" stroke="${darkerColor}" stroke-width="1.5" opacity="0.25"/>
-            </g>
-        `;
-    });
-    
-    return `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-            <filter id="paperBlur${variant}">
-                <feGaussianBlur in="SourceGraphic" stdDeviation="5"/>
-            </filter>
-            <filter id="paperTexture${variant}">
-                <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="5" result="noise"/>
-                <feDiffuseLighting in="noise" lighting-color="#FFF8F0" surfaceScale="0.8" result="light">
-                    <feDistantLight azimuth="45" elevation="55"/>
-                </feDiffuseLighting>
-                <feComposite in="SourceGraphic" in2="light" operator="arithmetic" k1="0.9" k2="0.1" k3="0" k4="0"/>
-            </filter>
-        </defs>
-        ${svgPieces}
-    </svg>`;
-}
-
-/**
- * Create a torn paper path with irregular edges
- */
-function createTornPaperPath(w: number, h: number, seed: number): string {
-    const points: Array<{x: number, y: number}> = [];
-    const segments = 20;
-    const tearAmount = 15;
-    
-    // Random but seeded variations
-    const rand = (i: number) => Math.sin(seed * 12.9898 + i * 78.233) * 0.5 + 0.5;
-    
-    // Top edge (left to right)
-    for (let i = 0; i <= segments; i++) {
-        const t = i / segments;
-        points.push({
-            x: t * w,
-            y: rand(i) * tearAmount - tearAmount/2
-        });
-    }
-    
-    // Right edge (top to bottom)
-    for (let i = 1; i <= segments; i++) {
-        const t = i / segments;
-        points.push({
-            x: w + rand(i + segments) * tearAmount - tearAmount/2,
-            y: t * h
-        });
-    }
-    
-    // Bottom edge (right to left)
-    for (let i = 1; i <= segments; i++) {
-        const t = i / segments;
-        points.push({
-            x: w - t * w,
-            y: h + rand(i + segments*2) * tearAmount - tearAmount/2
-        });
-    }
-    
-    // Left edge (bottom to top)
-    for (let i = 1; i < segments; i++) {
-        const t = i / segments;
-        points.push({
-            x: rand(i + segments*3) * tearAmount - tearAmount/2,
-            y: h - t * h
-        });
-    }
-    
-    // Create path
-    let path = `M ${points[0].x} ${points[0].y}`;
-    for (let i = 1; i < points.length; i++) {
-        path += ` L ${points[i].x} ${points[i].y}`;
-    }
-    path += ' Z';
-    
-    return path;
-}

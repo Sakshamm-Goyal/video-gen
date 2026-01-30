@@ -52,25 +52,26 @@ def get_fast_session():
         return new_session("u2net")
 
 def create_outline(alpha, stroke_size=12):
-    """Create clean white outline with glow."""
+    """Create THICKER white outline with prominent glow."""
     _, binary = cv2.threshold(alpha, 127, 255, cv2.THRESH_BINARY)
-    
+
     # Clean edges
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, 
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE,
                               cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
-    
-    # Inner stroke (solid white)
+
+    # THICKER inner stroke (solid white) - INCREASED iterations for more thickness
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (stroke_size, stroke_size))
-    dilated = cv2.dilate(binary, kernel, iterations=1)
+    dilated = cv2.dilate(binary, kernel, iterations=2)  # INCREASED from 1 to 2
     inner = cv2.subtract(dilated, binary)
-    
-    # Outer glow
-    kernel2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (stroke_size * 2, stroke_size * 2))
+
+    # BIGGER outer glow - MORE PROMINENT
+    kernel2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (stroke_size * 3, stroke_size * 3))  # INCREASED from *2 to *3
     dilated2 = cv2.dilate(binary, kernel2, iterations=1)
     outer = cv2.subtract(dilated2, dilated)
-    outer = cv2.GaussianBlur(outer, (stroke_size | 1, stroke_size | 1), 0)
-    outer = (outer * 0.5).astype(np.uint8)
-    
+    blur_size = (stroke_size * 2) | 1  # INCREASED blur
+    outer = cv2.GaussianBlur(outer, (blur_size, blur_size), 0)
+    outer = (outer * 0.7).astype(np.uint8)  # INCREASED opacity from 0.5 to 0.7
+
     return np.clip(cv2.add(outer, inner), 0, 255).astype(np.uint8)
 
 def create_shadow(alpha, offset_x=10, offset_y=12, blur=25, opacity=0.35):

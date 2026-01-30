@@ -48,46 +48,64 @@ export async function POST(request: NextRequest) {
 }
 
 async function processVideo(jobId: string, videoId: string, density: 'low' | 'medium' | 'high') {
+    console.log(`[${jobId}] Starting video processing for ${videoId}`);
+
     // Update status
     jobs.set(jobId, { status: 'processing', progress: 10 });
 
     // Find video file
     const fs = require('fs').promises;
-    const files = await fs.readdir(appConfig.api.tempUploadDir);
+    let files: string[];
+
+    try {
+        files = await fs.readdir(appConfig.api.tempUploadDir);
+    } catch (error) {
+        throw new Error(`Failed to read upload directory: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
     const videoFile = files.find((f: string) => f.startsWith(videoId));
 
     if (!videoFile) {
-        throw new Error('Video file not found');
+        throw new Error(`Video file not found. Video ID: ${videoId}. Available files: ${files.length}`);
     }
 
     const inputPath = join(appConfig.api.tempUploadDir, videoFile);
     const outputPath = join(appConfig.api.outputDir, `output-${videoId}.mp4`);
 
+    console.log(`[${jobId}] Input: ${inputPath}`);
+
     // Extract video info
     jobs.set(jobId, { status: 'processing', progress: 20 });
     const videoInfo = await extractVideoInfo(inputPath);
+
+    if (!videoInfo.duration || videoInfo.duration <= 0) {
+        throw new Error('Video has no duration or could not be read. Check that the file is a valid video.');
+    }
+    if (!videoInfo.fps || videoInfo.fps <= 0) {
+        throw new Error('Video has no frame rate. Check that the file is a valid video.');
+    }
 
     // Analyze video with Gemini 2.5 Flash for object detection AND theme
     jobs.set(jobId, { status: 'processing', progress: 25 });
     let safeZones = calculateSafeZones(videoInfo.width, videoInfo.height);
     let analysisResult;
     let themeResult;
-    
+
     try {
         console.log('Starting video analysis with Gemini 2.5 Flash...');
-        
+
         // Run both analyses in parallel for speed
         const [placementAnalysis, themeAnalysis] = await Promise.all([
             analyzeVideoForPlacement(inputPath),
             analyzeVideoTheme(inputPath)
         ]);
-        
+
         analysisResult = placementAnalysis;
         themeResult = themeAnalysis;
-        
+
         console.log('Placement analysis complete:', analysisResult);
         console.log('Theme analysis complete:', themeResult);
-        
+
         // Use smart safe zones based on detected objects
         safeZones = calculateSmartSafeZones(
             videoInfo.width,
@@ -99,12 +117,12 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
         console.log(`Video mood: ${themeResult.mood}, energy: ${themeResult.energyLevel}, colors: ${themeResult.colorPalette.join(', ')}`);
     } catch (error) {
         console.warn('Video analysis failed, using defaults:', error);
-        // Fall back to edge-based zones and default theme
+        // Fall back to edge-based zones and VIBRANT default theme
         safeZones = calculateSafeZones(videoInfo.width, videoInfo.height);
         themeResult = {
             mood: 'playful',
-            colorPalette: ['#FF6B6B', '#4ECDC4', '#FFE66D', '#95E1D3', '#F38181'],
-            suggestedScribbles: ['squiggle', 'scribbleLine', 'wave', 'brushStroke', 'underline', 'heart', 'star', 'smiley', 'spiral', 'dots', 'splatter', 'zigzag', 'curvedArrow', 'doubleScribble'],
+            colorPalette: ['#FF1744', '#2979FF', '#FFD600', '#00E676', '#D500F9'], // Super vibrant colors
+            suggestedScribbles: ['spiral', 'squiggle', 'scribbleLine', 'wave', 'brushStroke', 'heart', 'star', 'smiley', 'zigzag', 'arrow', 'speedArrow', 'curvedArrow', 'lightning', 'dots', 'splatter', 'doubleScribble', 'circle', 'flower'],
             paperStyle: 'warm-beige',
             energyLevel: 'moderate' as const
         };
@@ -124,63 +142,99 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
     const tempAssetsDir = join(appConfig.api.outputDir, `assets-${videoId}`);
     const { mkdir, writeFile, readdir } = require('fs/promises');
     await mkdir(tempAssetsDir, { recursive: true });
-    
-    console.log('Generating AI-themed scribbles with colors:', themeResult.colorPalette);
-    
+
+    // Filter colors: ensure VIBRANT, SATURATED colors only (match reference images)
+    const isVibrant = (hex: string): boolean => {
+        const h = hex.replace(/^#/, '');
+        if (h.length !== 6 && h.length !== 3) return false;
+        const r = parseInt(h.length === 6 ? h.slice(0, 2) : h[0] + h[0], 16) / 255;
+        const g = parseInt(h.length === 6 ? h.slice(2, 4) : h[1] + h[1], 16) / 255;
+        const b = parseInt(h.length === 6 ? h.slice(4, 6) : h[2] + h[2], 16) / 255;
+
+        // Calculate HSV saturation
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const saturation = max === 0 ? 0 : (max - min) / max;
+        const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        // Reject if too light (luminance > 0.85), too dark (max < 0.3), or not saturated enough (< 0.5)
+        return luminance < 0.85 && max > 0.3 && saturation > 0.5;
+    };
+    const vividPalette = themeResult.colorPalette.filter(c => isVibrant(c));
+    // Fallback to SUPER VIBRANT colors if AI gives us weak palette
+    const colorPalette = vividPalette.length >= 4 ? vividPalette : [
+        '#FF1744', '#2979FF', '#FFD600', '#00E676', '#D500F9', // Red, Blue, Yellow, Green, Purple
+        '#FF6D00', '#00BFA5', '#FF4081', '#FFEA00', '#651FFF'  // Orange, Teal, Pink, Lemon, Indigo
+    ];
+    console.log('Generating scribbles with VIBRANT colors (high saturation):', colorPalette);
+
     // Generate themed scribbles using AI-suggested types and colors
+    // OPTIMIZATION: Parallelize all SVG->PNG conversions
     const scribblePaths: string[] = [];
-    const scribbleTypes = themeResult.suggestedScribbles.slice(0, 15); // Use up to 15 suggested types for variety
-    
-    // Generate first set with all unique types
+    const scribbleTypes = themeResult.suggestedScribbles; // Use ALL types for maximum variety
+    const totalScribbles = 12; // MINIMAL: FFmpeg crashes with more inputs
+
+    // Prepare all scribble generation tasks
+    const scribbleGenerationTasks = [];
+
+    // Generate first set with all unique types - SMALL SIZES for dense coverage
     for (let i = 0; i < scribbleTypes.length; i++) {
         const type = scribbleTypes[i];
-        // Cycle through the AI-suggested color palette
-        const color = themeResult.colorPalette[i % themeResult.colorPalette.length];
-        const svg = generateThemedScribbleSVG(type, color, 200);
+        const color = colorPalette[i % colorPalette.length];
         const pngPath = join(tempAssetsDir, `scribble_${i + 1}.png`);
-        
-        await sharp(Buffer.from(svg))
-            .png()
-            .toFile(pngPath);
-        
-        scribblePaths.push(pngPath);
+        // LARGER: Increased sizes for better visibility (150-250px)
+        const baseSize = 150 + (i % 5) * 20;
+
+        scribbleGenerationTasks.push(
+            (async () => {
+                const svg = generateThemedScribbleSVG(type, color, baseSize);
+                await sharp(Buffer.from(svg)).png().toFile(pngPath);
+                return pngPath;
+            })()
+        );
     }
-    
-    // Generate additional scribbles with color variants for rich variety
-    const totalScribbles = 25; // Good balance of variety and speed
+
+    // Generate additional scribbles with color variants for full-screen coverage
     for (let i = scribbleTypes.length; i < totalScribbles; i++) {
         const type = scribbleTypes[i % scribbleTypes.length];
-        // Use different color for each variant of the same type
         const colorOffset = Math.floor(i / scribbleTypes.length);
-        const color = themeResult.colorPalette[(i + colorOffset) % themeResult.colorPalette.length];
-        const svg = generateThemedScribbleSVG(type, color, 200);
+        const color = colorPalette[(i + colorOffset) % colorPalette.length];
         const pngPath = join(tempAssetsDir, `scribble_${i + 1}.png`);
-        
-        await sharp(Buffer.from(svg))
-            .png()
-            .toFile(pngPath);
-        
-        scribblePaths.push(pngPath);
+        // LARGER: Increased sizes for better visibility (150-250px)
+        const baseSize = 150 + (i % 5) * 20;
+
+        scribbleGenerationTasks.push(
+            (async () => {
+                const svg = generateThemedScribbleSVG(type, color, baseSize);
+                await sharp(Buffer.from(svg)).png().toFile(pngPath);
+                return pngPath;
+            })()
+        );
     }
-    
-    console.log(`Generated ${scribblePaths.length} AI-themed scribbles with diverse types`);
-    
+
+    // Execute all scribble generation in parallel (FAST!)
+    const generatedScribbles = await Promise.all(scribbleGenerationTasks);
+    scribblePaths.push(...generatedScribbles);
+
+    console.log(`Generated ${scribblePaths.length} AI-themed scribbles with diverse types (parallel processing)`);
+
     // Generate themed paper frames
-    console.log('Generating AI-themed paper frames with style:', themeResult.paperStyle);
-    const paperFramePaths: string[] = [];
-    
-    for (let variant = 0; variant < 4; variant++) {
-        const svg = generateThemedPaperSVG(themeResult.paperStyle, variant);
+    // OPTIMIZATION: Parallelize paper frame generation
+    console.log('Generating PROFESSIONAL full-screen paper backgrounds with style:', themeResult.paperStyle);
+
+    // OPTIMIZED: Generate 4 variants for balance of variety and speed
+    const paperGenerationTasks = Array.from({ length: 4 }, (_, variant) => {
         const pngPath = join(tempAssetsDir, `frame_${variant + 1}.png`);
-        
-        await sharp(Buffer.from(svg))
-            .png()
-            .toFile(pngPath);
-        
-        paperFramePaths.push(pngPath);
-    }
-    
-    console.log(`Generated ${paperFramePaths.length} AI-themed paper frames`);
+        return (async () => {
+            const svg = generateThemedPaperSVG(themeResult.paperStyle, variant);
+            await sharp(Buffer.from(svg)).png().toFile(pngPath);
+            return pngPath;
+        })();
+    });
+
+    const paperFramePaths = await Promise.all(paperGenerationTasks);
+
+    console.log(`Generated ${paperFramePaths.length} professional paper backgrounds (parallel processing)`);
 
     // Generate INTELLIGENT effect timeline based on video duration and energy
     console.log('Generating intelligent effect timeline...');
@@ -198,16 +252,16 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
                 appearanceChance: 0.7,
             },
             scribbles: {
-                burstMinDuration: 0.3,
-                burstMaxDuration: 1.5,
-                quietMinDuration: 0.2,
-                quietMaxDuration: 1.0,
-                minDensity: 2,
-                maxDensity: 18,
+                burstMinDuration: 0.12,
+                burstMaxDuration: 0.45,
+                quietMinDuration: 0.02,
+                quietMaxDuration: 0.06,
+                minDensity: 18,
+                maxDensity: 50,
             }
         }
     );
-    
+
     console.log(`Effect timeline generated:`);
     console.log(`  - ${effectTimeline.scribbleBursts.length} scribble bursts (varying density, with quiet periods)`);
     console.log(`  - ${effectTimeline.paperAppearances.length} paper appearances (not always visible, with fade)`);
@@ -225,20 +279,20 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
     let extractedForeground: string | null = null;
     let extractedOutline: string | null = null;
     let extractedShadow: string | null = null;
-    
+
     try {
-        console.log('Extracting foreground, outline, and shadow (FAST MODE)...');
+        console.log('Extracting foreground, outline, and shadow (ULTRA FAST MODE)...');
         const extraction = await extractForegroundAndOutline(
             inputPath,
             foregroundPath,
             outlinePath,
-            14, // Stroke size for clean outline
-            4   // FAST: sample every 4th frame (was 2)
+            18, // THICKER: Increased stroke size for more prominent outline (was 14)
+            6   // ULTRA FAST: sample every 6th frame for speed (was 4)
         );
         extractedForeground = extraction.foreground;
         extractedOutline = extraction.outline;
         extractedShadow = extraction.shadow;
-        
+
         if (extractedForeground) {
             console.log('Foreground extracted:', extractedForeground);
         }
@@ -252,46 +306,68 @@ async function processVideo(jobId: string, videoId: string, density: 'low' | 'me
         console.warn('Failed to extract foreground, scribbles will overlap subject:', error);
     }
 
+    // Ensure output directory exists before FFmpeg write
+    await mkdir(appConfig.api.outputDir, { recursive: true });
+
     // Composite overlays with full effect stack
     jobs.set(jobId, { status: 'processing', progress: 50 });
 
-    await compositeOverlays(
-        inputPath,
-        outputPath,
-        scribbleAnimations,
-        paperFramePaths,
-        scribblePaths,
-        cornerPath,
-        videoInfo,
-        (percent) => {
-            // Update progress
-            const totalProgress = 50 + (percent / 100) * 40; // 50-90%
-            jobs.set(jobId, { status: 'processing', progress: Math.round(totalProgress) });
-        },
-        analysisResult?.subjectBounds,
-        extractedOutline,
-        themeResult.energyLevel,
-        extractedForeground, // Pass foreground so scribbles appear BEHIND subject
-        extractedShadow,     // Pass shadow for depth effect
-        effectTimeline       // Pass intelligent effect timeline for organic behavior
-    );
+    try {
+        await compositeOverlays(
+            inputPath,
+            outputPath,
+            scribbleAnimations,
+            paperFramePaths,
+            scribblePaths,
+            cornerPath,
+            videoInfo,
+            (percent) => {
+                // Update progress
+                const totalProgress = 50 + (percent / 100) * 40; // 50-90%
+                jobs.set(jobId, { status: 'processing', progress: Math.round(totalProgress) });
+            },
+            analysisResult?.subjectBounds,
+            extractedOutline,
+            themeResult.energyLevel,
+            extractedForeground, // Pass foreground so scribbles appear BEHIND subject
+            extractedShadow,     // Pass shadow for depth effect
+            effectTimeline       // Pass intelligent effect timeline for organic behavior
+        );
+
+        // ENHANCED: Validate output file was created and is valid
+        try {
+            const { stat } = require('fs/promises');
+            const outputStats = await stat(outputPath);
+
+            if (outputStats.size === 0) {
+                throw new Error('Output video file is empty');
+            }
+
+            console.log(`Output video created successfully: ${(outputStats.size / 1024 / 1024).toFixed(2)} MB`);
+        } catch (validateError) {
+            throw new Error(`Failed to validate output video: ${validateError}`);
+        }
+    } catch (compositeError) {
+        console.error('FFmpeg composite error:', compositeError);
+        throw new Error(`Video composition failed: ${compositeError instanceof Error ? compositeError.message : 'Unknown error'}`);
+    }
 
     // Clean up temp assets and intermediate files
     try {
         const { rm, unlink } = require('fs/promises');
         await rm(tempAssetsDir, { recursive: true, force: true });
-        
+
         // Clean up foreground, outline, and shadow videos
         if (extractedForeground) {
-            try { await unlink(extractedForeground); } catch {}
+            try { await unlink(extractedForeground); } catch { }
         }
         if (extractedOutline) {
-            try { await unlink(extractedOutline); } catch {}
+            try { await unlink(extractedOutline); } catch { }
         }
         if (extractedShadow) {
-            try { await unlink(extractedShadow); } catch {}
+            try { await unlink(extractedShadow); } catch { }
         }
-        
+
         console.log('Cleaned up temp files');
     } catch (e) {
         console.warn('Failed to clean up temp assets:', e);

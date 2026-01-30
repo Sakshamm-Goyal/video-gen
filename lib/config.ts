@@ -8,9 +8,9 @@ export const config = {
     apiKey: process.env.GOOGLE_AI_API_KEY || '',
   },
   assets: {
-    scribbleCount: 20,
-    paperFrameCount: 8,
-    cornerCount: 2,
+    scribbleCount: 15, // MINIMAL: FFmpeg can't handle more inputs
+    paperFrameCount: 2, // MINIMAL for speed
+    cornerCount: 1,
   },
   video: {
     defaultResolution: '1280:720', // 720p for processing
@@ -25,22 +25,22 @@ export const config = {
       bottomBand: 0.88,    // 12% bottom edge (starts at 88%)
     },
   },
-  // Intelligent effect timing configuration
+  // Intelligent effect timing: VERY FAST CHANGING hand-drawn doodles (frame-by-frame feel)
   effects: {
     paper: {
       minVisibleDuration: 1.0,    // seconds - minimum time paper is visible
       maxVisibleDuration: 4.0,    // seconds - maximum time paper is visible
-      minGapDuration: 0.5,        // seconds - minimum gap between appearances
-      maxGapDuration: 3.0,        // seconds - maximum gap between appearances
-      appearanceChance: 0.7,      // 70% chance paper appears in each time slot
+      minGapDuration: 1.0,        // seconds - minimum gap between appearances
+      maxGapDuration: 4.0,        // seconds - maximum gap between appearances
+      appearanceChance: 0.25,       // REDUCED: 25% for cleaner background like reference
     },
     scribbles: {
-      burstMinDuration: 0.3,      // seconds - minimum burst duration
-      burstMaxDuration: 1.5,      // seconds - maximum burst duration
-      quietMinDuration: 0.2,      // seconds - minimum quiet period
-      quietMaxDuration: 1.0,      // seconds - maximum quiet period
-      minDensity: 2,              // minimum scribbles per burst
-      maxDensity: 18,             // maximum scribbles per burst
+      burstMinDuration: 0.12,     // seconds - very short bursts = doodles change every few frames
+      burstMaxDuration: 0.45,     // seconds - rapid churn, never static
+      quietMinDuration: 0.02,     // seconds - minimal gap = constant alive feel
+      quietMaxDuration: 0.06,     // seconds
+      minDensity: 20,              // MODERATE: Prevent FFmpeg overload
+      maxDensity: 40,              // MODERATE: Balance performance and density
     }
   },
 };

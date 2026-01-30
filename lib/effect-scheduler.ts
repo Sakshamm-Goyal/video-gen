@@ -70,7 +70,7 @@ export function generateEffectTimeline(
     seed: number = Date.now()
 ): EffectTimeline {
     const random = seededRandom(seed);
-    
+
     // Adjust config based on energy level
     const energyMultipliers = {
         calm: { burstFreq: 0.6, burstDensity: 0.5, paperFreq: 0.5, quietBonus: 1.5 },
@@ -78,7 +78,7 @@ export function generateEffectTimeline(
         energetic: { burstFreq: 1.5, burstDensity: 1.4, paperFreq: 1.3, quietBonus: 0.6 }
     };
     const multiplier = energyMultipliers[energyLevel];
-    
+
     // Generate scribble bursts
     const scribbleBursts = generateScribbleBursts(
         videoDuration,
@@ -87,7 +87,7 @@ export function generateEffectTimeline(
         multiplier,
         random
     );
-    
+
     // Generate paper appearances
     const paperAppearances = generatePaperAppearances(
         videoDuration,
@@ -96,7 +96,7 @@ export function generateEffectTimeline(
         multiplier,
         random
     );
-    
+
     return {
         scribbleBursts,
         paperAppearances,
@@ -118,24 +118,24 @@ function generateScribbleBursts(
 ): ScribbleBurst[] {
     const bursts: ScribbleBurst[] = [];
     let currentTime = 0;
-    
+
     // Start with a small delay (not immediate)
     currentTime += 0.2 + random() * 0.5;
-    
+
     while (currentTime < duration - 0.5) {
-        // Decide: burst or quiet period?
-        const isBurst = random() < (0.65 * multiplier.burstFreq);
-        
+        // Decide: burst or quiet period? SUPER HIGH burst probability = doodles ALWAYS changing (frame-by-frame alive feel)
+        const isBurst = random() < (0.995 * multiplier.burstFreq); // INCREASED from 0.98 to 0.995
+
         if (isBurst) {
             // Create a burst
-            const burstDuration = config.burstMinDuration + 
+            const burstDuration = config.burstMinDuration +
                 random() * (config.burstMaxDuration - config.burstMinDuration);
-            
+
             // Determine density for this burst
             const densityRoll = random() * multiplier.burstDensity;
             let density: 'sparse' | 'medium' | 'dense';
             let scribbleCount: number;
-            
+
             if (densityRoll < 0.3) {
                 density = 'sparse';
                 scribbleCount = config.minDensity + Math.floor(random() * 3);
@@ -147,10 +147,10 @@ function generateScribbleBursts(
                 density = 'dense';
                 scribbleCount = Math.floor(config.maxDensity * 0.7 + random() * config.maxDensity * 0.3);
             }
-            
+
             // Clamp scribble count
             scribbleCount = Math.max(config.minDensity, Math.min(config.maxDensity, scribbleCount));
-            
+
             // Select random scribbles for this burst (different each time)
             const scribbleIndices: number[] = [];
             const availableIndices = Array.from({ length: totalScribbles }, (_, i) => i);
@@ -159,36 +159,39 @@ function generateScribbleBursts(
                 scribbleIndices.push(availableIndices[idx]);
                 availableIndices.splice(idx, 1);
             }
-            
-            // Stagger delay - scribbles don't all appear at once
-            const staggerDelay = density === 'dense' 
-                ? 0.02 + random() * 0.03 
+
+            // Stagger: VERY FAST—doodles appear "drawn on" over 3–8 frames; no two at exact same time (hand-drawn rhythm)
+            const staggerDelay = density === 'dense'
+                ? 0.003 + random() * 0.006   // ~2–4 frames at 30fps
                 : density === 'medium'
-                    ? 0.03 + random() * 0.05
-                    : 0.05 + random() * 0.08;
-            
+                    ? 0.005 + random() * 0.01
+                    : 0.008 + random() * 0.014;
+            // FFmpeg between(t,a,b) requires a <= b: ensure last scribble's staggered start < burst end
+            const maxScribblesInBurst = Math.max(1, Math.floor(burstDuration / staggerDelay));
+            const cappedIndices = scribbleIndices.slice(0, maxScribblesInBurst);
+
             bursts.push({
                 startTime: currentTime,
                 duration: burstDuration,
                 density,
-                scribbleIndices,
+                scribbleIndices: cappedIndices,
                 staggerDelay
             });
-            
+
             currentTime += burstDuration;
         }
-        
-        // Add quiet period (gap)
-        const quietDuration = (config.quietMinDuration + 
+
+        // Add very short quiet period (minimal gap = constant alive doodles)
+        const quietDuration = (config.quietMinDuration +
             random() * (config.quietMaxDuration - config.quietMinDuration)) * multiplier.quietBonus;
         currentTime += quietDuration;
-        
-        // Occasionally add extra long quiet period for breathing room
-        if (random() < 0.15 * multiplier.quietBonus) {
-            currentTime += 0.5 + random() * 1.0;
+
+        // Rarely add a slightly longer gap
+        if (random() < 0.04 * multiplier.quietBonus) {
+            currentTime += 0.04 + random() * 0.08;
         }
     }
-    
+
     return bursts;
 }
 
@@ -206,40 +209,40 @@ function generatePaperAppearances(
     const appearances: PaperAppearance[] = [];
     let currentTime = 0;
     let lastVariant = -1;
-    
+
     // Small initial delay
     currentTime += 0.3 + random() * 0.7;
-    
+
     while (currentTime < duration - config.minVisibleDuration) {
         // Decide if paper appears in this slot
         if (random() < config.appearanceChance * multiplier.paperFreq) {
             // Paper appears
-            const visibleDuration = config.minVisibleDuration + 
+            const visibleDuration = config.minVisibleDuration +
                 random() * (config.maxVisibleDuration - config.minVisibleDuration);
-            
+
             // Pick a different variant than last time
             let variant = Math.floor(random() * totalVariants);
             if (variant === lastVariant && totalVariants > 1) {
                 variant = (variant + 1) % totalVariants;
             }
             lastVariant = variant;
-            
+
             // Random fade durations
             const fadeInDuration = 0.15 + random() * 0.25;
             const fadeOutDuration = 0.2 + random() * 0.3;
-            
+
             // Random position offset (subtle movement)
             const position = {
                 x: (random() - 0.5) * 20, // -10 to +10 pixels
                 y: (random() - 0.5) * 16  // -8 to +8 pixels
             };
-            
+
             // Random rotation (subtle)
             const rotation = (random() - 0.5) * 4; // -2 to +2 degrees
-            
+
             // Random scale (subtle)
             const scale = 0.98 + random() * 0.04; // 0.98 to 1.02
-            
+
             appearances.push({
                 startTime: currentTime,
                 duration: visibleDuration,
@@ -250,21 +253,21 @@ function generatePaperAppearances(
                 rotation,
                 scale
             });
-            
+
             currentTime += visibleDuration;
         }
-        
+
         // Gap before next potential appearance
-        const gapDuration = config.minGapDuration + 
+        const gapDuration = config.minGapDuration +
             random() * (config.maxGapDuration - config.minGapDuration);
         currentTime += gapDuration * multiplier.quietBonus;
-        
+
         // Occasionally add longer gap
         if (random() < 0.2) {
             currentTime += 0.8 + random() * 1.5;
         }
     }
-    
+
     return appearances;
 }
 
@@ -280,32 +283,32 @@ export function getScribbleVisibility(
     for (let i = 0; i < timeline.scribbleBursts.length; i++) {
         const burst = timeline.scribbleBursts[i];
         const indexInBurst = burst.scribbleIndices.indexOf(scribbleIndex);
-        
+
         if (indexInBurst === -1) continue;
-        
+
         // Calculate staggered start time for this scribble
         const staggeredStart = burst.startTime + indexInBurst * burst.staggerDelay;
         const endTime = burst.startTime + burst.duration;
-        
+
         if (time >= staggeredStart && time <= endTime) {
             // Calculate fade in/out
             const fadeIn = 0.08;
             const fadeOut = 0.12;
-            
+
             let opacity = 1.0;
             const elapsed = time - staggeredStart;
             const remaining = endTime - time;
-            
+
             if (elapsed < fadeIn) {
                 opacity = elapsed / fadeIn;
             } else if (remaining < fadeOut) {
                 opacity = remaining / fadeOut;
             }
-            
+
             return { visible: true, opacity, burstIndex: i };
         }
     }
-    
+
     return null;
 }
 
@@ -319,23 +322,23 @@ export function getPaperVisibility(
 ): PaperAppearance & { opacity: number } | null {
     for (const appearance of timeline.paperAppearances) {
         const endTime = appearance.startTime + appearance.duration;
-        
+
         if (time >= appearance.startTime && time <= endTime) {
             const elapsed = time - appearance.startTime;
             const remaining = endTime - time;
-            
+
             let opacity = 1.0;
-            
+
             if (elapsed < appearance.fadeInDuration) {
                 opacity = elapsed / appearance.fadeInDuration;
             } else if (remaining < appearance.fadeOutDuration) {
                 opacity = remaining / appearance.fadeOutDuration;
             }
-            
+
             return { ...appearance, opacity };
         }
     }
-    
+
     return null;
 }
 
@@ -348,27 +351,27 @@ export function generateScribbleEnableExpr(
     timeline: EffectTimeline
 ): string {
     const conditions: string[] = [];
-    
+
     for (const burst of timeline.scribbleBursts) {
         const indexInBurst = burst.scribbleIndices.indexOf(scribbleIndex);
         if (indexInBurst === -1) continue;
-        
+
         const staggeredStart = burst.startTime + indexInBurst * burst.staggerDelay;
         const endTime = burst.startTime + burst.duration;
-        
+
         // between(t, start, end)
         conditions.push(`between(t,${staggeredStart.toFixed(3)},${endTime.toFixed(3)})`);
     }
-    
+
     if (conditions.length === 0) {
         return '0'; // Never visible
     }
-    
+
     // Combine with OR (max of all conditions)
     if (conditions.length === 1) {
         return conditions[0];
     }
-    
+
     // FFmpeg doesn't have OR, use max() or addition
     // For boolean conditions, max works as OR
     return conditions.join('+') + '>0';
@@ -384,10 +387,10 @@ export function generatePaperEnableExpr(
     if (appearanceIndex >= timeline.paperAppearances.length) {
         return '0';
     }
-    
+
     const appearance = timeline.paperAppearances[appearanceIndex];
     const endTime = appearance.startTime + appearance.duration;
-    
+
     return `between(t,${appearance.startTime.toFixed(3)},${endTime.toFixed(3)})`;
 }
 
@@ -401,33 +404,34 @@ export function generateFadeExpr(
     fadeOut: number
 ): string {
     const endTime = startTime + duration;
-    
+
     // Smooth fade using if/else logic in FFmpeg
     // if(t < startTime + fadeIn, (t - startTime) / fadeIn, 
     //    if(t > endTime - fadeOut, (endTime - t) / fadeOut, 1))
     return `if(lt(t,${(startTime + fadeIn).toFixed(3)}),` +
-           `(t-${startTime.toFixed(3)})/${fadeIn.toFixed(3)},` +
-           `if(gt(t,${(endTime - fadeOut).toFixed(3)}),` +
-           `(${endTime.toFixed(3)}-t)/${fadeOut.toFixed(3)},1))`;
+        `(t-${startTime.toFixed(3)})/${fadeIn.toFixed(3)},` +
+        `if(gt(t,${(endTime - fadeOut).toFixed(3)}),` +
+        `(${endTime.toFixed(3)}-t)/${fadeOut.toFixed(3)},1))`;
 }
 
 /**
- * Default effect configuration
+ * Default effect configuration (very fast changing hand-drawn doodles)
+ * ENHANCED: More doodles, longer visibility for reference image style
  */
 export const defaultEffectConfig: EffectConfig = {
     paper: {
-        minVisibleDuration: 1.0,
-        maxVisibleDuration: 4.0,
+        minVisibleDuration: 1.5,
+        maxVisibleDuration: 5.0,
         minGapDuration: 0.5,
         maxGapDuration: 3.0,
-        appearanceChance: 0.7,
+        appearanceChance: 0.3, // REDUCED: Less paper, cleaner background like reference images
     },
     scribbles: {
-        burstMinDuration: 0.3,
-        burstMaxDuration: 1.5,
-        quietMinDuration: 0.2,
-        quietMaxDuration: 1.0,
-        minDensity: 2,
-        maxDensity: 18,
+        burstMinDuration: 0.05,  // ULTRA FAST: Rapid fire changes
+        burstMaxDuration: 0.25,  // ULTRA FAST: Super quick bursts
+        quietMinDuration: 0.002, // ULTRA FAST: Virtually no gaps
+        quietMaxDuration: 0.008, // ULTRA FAST: Instant changes
+        minDensity: 12,          // MODERATE: Reduced to prevent FFmpeg 221
+        maxDensity: 24,          // MODERATE: Cap at safe limit for filter graph size
     }
 };
