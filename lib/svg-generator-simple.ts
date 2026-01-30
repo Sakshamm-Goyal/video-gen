@@ -63,10 +63,29 @@ export function generateSimpleScribbleSVG(
             break;
 
         case 'arrow':
-            // Simple arrow
+            // Simple straight arrow
             const arrowBody = '<line x1="' + (size * 0.15) + '" y1="' + (size / 2) + '" x2="' + (size * 0.85) + '" y2="' + (size / 2) + '" stroke="' + color + '" stroke-width="' + (sw * 1.2) + '" stroke-linecap="round"/>';
             const arrowHead = '<polyline points="' + (size * 0.65) + ',' + (size * 0.35) + ' ' + (size * 0.85) + ',' + (size / 2) + ' ' + (size * 0.65) + ',' + (size * 0.65) + '" fill="none" stroke="' + color + '" stroke-width="' + (sw * 1.2) + '" stroke-linecap="round" stroke-linejoin="round"/>';
             shape = arrowBody + arrowHead;
+            break;
+
+        case 'curvedArrow':
+            // Curved arrow pointing inward
+            const curvedPath = 'M' + (size * 0.15) + ' ' + (size * 0.7) + ' Q' + (size * 0.4) + ' ' + (size * 0.3) + ' ' + (size * 0.75) + ' ' + (size * 0.45);
+            const curvedHead = '<polyline points="' + (size * 0.65) + ',' + (size * 0.35) + ' ' + (size * 0.75) + ',' + (size * 0.45) + ' ' + (size * 0.68) + ',' + (size * 0.55) + '" fill="none" stroke="' + color + '" stroke-width="' + (sw * 1.2) + '" stroke-linecap="round" stroke-linejoin="round"/>';
+            shape = '<path d="' + curvedPath + '" fill="none" stroke="' + color + '" stroke-width="' + (sw * 1.2) + '" stroke-linecap="round"/>' + curvedHead;
+            break;
+
+        case 'motionLine':
+            // Motion/speed lines
+            let motionLines = '';
+            for (let i = 0; i < 3; i++) {
+                const yPos = size * (0.35 + i * 0.15) + rnd() * 5;
+                const xStart = size * (0.2 + i * 0.05);
+                const xEnd = size * (0.7 + i * 0.05);
+                motionLines += '<line x1="' + xStart + '" y1="' + yPos + '" x2="' + xEnd + '" y2="' + yPos + '" stroke="' + color + '" stroke-width="' + (sw * 0.9) + '" stroke-linecap="round"/>';
+            }
+            shape = motionLines;
             break;
 
         case 'zigzag':
